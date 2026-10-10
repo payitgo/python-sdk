@@ -22,7 +22,7 @@ __version__ = "0.1.0"
 __all__ = ["Client", "Webhook", "PayitgoError", "SignatureVerificationError", "PayitgoObject", "WEBHOOK_EVENTS"]
 
 # Used when neither base_url nor PAYITGO_BASE_URL is set.
-DEFAULT_BASE_URL = ""
+DEFAULT_BASE_URL = "https://api.payitgo.co"
 
 #: The events payitgo sends. A test (``client.webhooks.test()``) sends "ping".
 WEBHOOK_EVENTS = (
