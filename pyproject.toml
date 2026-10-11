@@ -14,7 +14,7 @@ dependencies = []
 keywords = ["payitgo", "payments", "crypto", "usdt", "bitcoin"]
 
 [project.urls]
-Repository = "https://github.com/thedivinez/payitgo-sdk/tree/main/python"
+Repository = "https://github.com/payitgo/python-sdk"
 
 [tool.setuptools]
 packages = ["payitgo"]

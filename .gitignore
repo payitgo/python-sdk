@@ -1,0 +1,5 @@
+# Build output
+__pycache__/
+*.egg-info/
+build/
+dist/
