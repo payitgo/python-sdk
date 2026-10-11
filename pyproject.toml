@@ -9,11 +9,13 @@ description = "Python client for the payitgo crypto payment gateway"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
+authors = [{ name = "payitgo" }]
 requires-python = ">=3.8"
 dependencies = []
 keywords = ["payitgo", "payments", "crypto", "usdt", "bitcoin"]
 
 [project.urls]
+Homepage = "https://payitgo.co"
 Repository = "https://github.com/payitgo/python-sdk"
 
 [tool.setuptools]
