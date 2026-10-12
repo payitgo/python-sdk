@@ -89,10 +89,27 @@ CHOSEN = {
     "amount_due_usd": "10", "fees_paid_by_customer": False, "network_fee": "0.000012", "network_fee_usd": "0.01",
     "settlement": "custodial", "received_usd": "0", "rate_locked": "0.5", "deposits": [],
     "expires_at": "2026-10-10T12:15:00Z", "created_at": "2026-10-10T12:00:00Z",
-    "network_fee_note": "XRP Ledger testnet: test XRP only. Include destination tag — required.",
+    "network_fee_note": "Near-zero fees. Include destination tag — required.",
     "qr_payload": "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe",
     "checkout_token": "ct_abc", "checkout_url": "https://pay.example/ct_abc", "description": "Order 7",
     "metadata": {"cart": "42"},
+}
+
+# A test payment whose simulated outcome has paid it.
+SIMULATED = {
+    "id": "pay_2", "merchant_id": "mch_1", "order_id": "ORD-8", "status": "detecting", "livemode": False,
+    "simulation": {"outcome": "confirmed", "state": "running"},
+    "token": "USDT_TRC20", "chain": "tron", "deposit_address": "TPk2bpQqWRpXiaUHS9SXnZCDgvwrsuJ71o",
+    "crypto_amount": "20", "received_amount": "20", "usd_amount": "20", "amount_due_usd": "20",
+    "fees_paid_by_customer": False, "network_fee": "1", "network_fee_usd": "0.3", "settlement": "custodial",
+    "received_usd": "20", "rate_locked": "1",
+    "deposits": [{
+        "tx_id": "sim_pay_2_1791817211348_0", "token": "USDT_TRC20", "chain": "tron", "amount": "20",
+        "usd_value": "20", "counted": True, "status": "pending", "seen_at": "2026-10-10T12:00:05Z", "simulated": True,
+    }],
+    "expires_at": "2026-10-10T12:15:00Z", "created_at": "2026-10-10T12:00:00Z",
+    "network_fee_note": "Near-zero fees on Tron. Fastest settlement.",
+    "qr_payload": "TPk2bpQqWRpXiaUHS9SXnZCDgvwrsuJ71o",
 }
 
 
@@ -248,6 +265,37 @@ class WebhookIPNTest(unittest.TestCase):
             self.client.payments.select_token("pay_1", "XRP")
         self.assertEqual((ctx.exception.status, ctx.exception.message),
                          (409, "the coin for this payment has already been chosen"))
+
+    def test_payment_simulate(self):
+        self.reply(200, SIMULATED)
+        payment = self.client.payments.simulate("pay_2", "confirmed")
+        req = self.request()
+        self.assertEqual((req["method"], req["path"]), ("POST", "/v1/payments/pay_2/simulate"))
+        self.assertEqual(req["headers"]["Authorization"], "Bearer sk_test_abc")
+        self.assertEqual(req["headers"]["Content-Type"], "application/json")
+        self.assertEqual(req["body"], {"outcome": "confirmed"})
+        self.assertEqual(payment, SIMULATED)
+        self.assertEqual((payment.simulation.outcome, payment.simulation.state), ("confirmed", "running"))
+        self.assertTrue(payment.deposits[0].simulated)
+        # An order id is escaped in the path, as payments.retrieve does.
+        self.reply(200, SIMULATED)
+        self.client.payments.simulate("ORD 8/1", "expired")
+        self.assertEqual(self.request(1)["path"], "/v1/payments/ORD%208%2F1/simulate")
+
+    def test_payment_simulate_running(self):
+        self.reply(409, {"error": "a simulation is already running for this payment"})
+        with self.assertRaises(payitgo.PayitgoError) as ctx:
+            self.client.payments.simulate("pay_2", "confirmed")
+        self.assertEqual((ctx.exception.status, ctx.exception.message),
+                         (409, "a simulation is already running for this payment"))
+
+    def test_payment_create_simulate(self):
+        self.reply(201, SIMULATED)
+        payment = self.client.payments.create("ORD-8", 20, token="USDT_TRC20", simulate="confirmed")
+        self.assertEqual(self.request()["body"],
+                         {"order_id": "ORD-8", "amount_usd": "20", "token": "USDT_TRC20", "simulate": "confirmed"})
+        self.assertEqual(payment.simulation.outcome, "confirmed")
+        self.assertIn("confirmed", payitgo.SIMULATION_OUTCOMES)
 
 
 class ClientConstructEventTest(unittest.TestCase):

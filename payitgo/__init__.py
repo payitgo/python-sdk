@@ -19,7 +19,8 @@ import urllib.parse
 import urllib.request
 
 __version__ = "0.1.1"
-__all__ = ["Client", "Webhook", "PayitgoError", "SignatureVerificationError", "PayitgoObject", "WEBHOOK_EVENTS"]
+__all__ = ["Client", "Webhook", "PayitgoError", "SignatureVerificationError", "PayitgoObject", "WEBHOOK_EVENTS",
+           "SIMULATION_OUTCOMES"]
 
 # Used when neither base_url nor PAYITGO_BASE_URL is set.
 DEFAULT_BASE_URL = "https://api.payitgo.co"
@@ -30,6 +31,11 @@ WEBHOOK_EVENTS = (
     "payment.expired", "payment.failed", "payment.wrong_asset", "payment.late_deposit",
     "payout.approved", "payout.rejected", "payout.sent", "settlement.completed", "settlement.failed",
     "ping",
+)
+
+#: The outcomes a test payment can be made to go through: ``client.payments.simulate()``.
+SIMULATION_OUTCOMES = (
+    "confirmed", "overpaid", "partially_paid", "underpaid", "expired", "failed", "wrong_asset", "paid_late",
 )
 
 
@@ -138,7 +144,8 @@ class _Payments:
         webhook_url (https) gets the payment's events instead of the webhook's URL,
         signed with the same secret (default: the client's webhook_url).
         Optional fields: tokens (the coins to offer), description, metadata,
-        customer_email, success_url, cancel_url.
+        customer_email, success_url, cancel_url, and simulate (test keys only: the
+        outcome to simulate, as payments.simulate does, once the payment has its coin).
         """
         body = {"order_id": order_id, "amount_usd": str(amount_usd)}
         if token:
@@ -162,6 +169,17 @@ class _Payments:
         """
         return self._client._request("POST", "/v1/payments/" + urllib.parse.quote(payment_id, safe="") + "/token",
                                      {"token": token})
+
+    def simulate(self, payment_id, outcome):
+        """Plays an outcome (one of SIMULATION_OUTCOMES) on a test payment: payitgo sends its
+        deposits, status changes and webhooks a few seconds apart, with no coins. payment_id
+        is the payment's id (pay_…) or your order id.
+
+        Returns the whole payment, with its simulation. A live payment is a 400; a simulation
+        that is still running, a 409.
+        """
+        return self._client._request("POST", "/v1/payments/" + urllib.parse.quote(payment_id, safe="") + "/simulate",
+                                     {"outcome": outcome})
 
     def list(self, status=None, chain=None, token=None, limit=None, offset=None, store_id=None):
         """Payments of the key's mode, newest first: {payments, total, limit, offset}.
