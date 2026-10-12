@@ -90,7 +90,7 @@ CHOSEN = {
     "settlement": "custodial", "received_usd": "0", "rate_locked": "0.5", "deposits": [],
     "expires_at": "2026-10-10T12:15:00Z", "created_at": "2026-10-10T12:00:00Z",
     "network_fee_note": "XRP Ledger testnet: test XRP only. Include destination tag — required.",
-    "qr_payload": "xrpl:rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe?amount=20.000000&dt=1042",
+    "qr_payload": "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe",
     "checkout_token": "ct_abc", "checkout_url": "https://pay.example/ct_abc", "description": "Order 7",
     "metadata": {"cart": "42"},
 }
