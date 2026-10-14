@@ -9,7 +9,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import payitgo  # noqa: E402
+import sdk.python.payitgo as payitgo  # noqa: E402
 
 # Signed by the gateway's own signer.
 SECRET = "whsec_test_secret"
