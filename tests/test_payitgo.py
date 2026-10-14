@@ -1,3 +1,4 @@
+import decimal
 import hashlib
 import hmac
 import json
@@ -9,7 +10,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import sdk.python.payitgo as payitgo  # noqa: E402
+import payitgo  # noqa: E402
 
 # Signed by the gateway's own signer.
 SECRET = "whsec_test_secret"
@@ -111,6 +112,11 @@ SIMULATED = {
     "network_fee_note": "Near-zero fees on Tron. Fastest settlement.",
     "qr_payload": "TPk2bpQqWRpXiaUHS9SXnZCDgvwrsuJ71o",
 }
+
+
+# A payment priced in euros: the gateway converted the price into usd_amount at price_rate.
+PRICED = dict(CHOSEN, order_id="ORD-10", usd_amount="49.23", amount_due_usd="49.23", price_amount="45.5",
+              price_currency="EUR", price_rate="1.082")
 
 
 class _FakeGateway(BaseHTTPRequestHandler):
@@ -296,6 +302,28 @@ class WebhookIPNTest(unittest.TestCase):
                          {"order_id": "ORD-8", "amount_usd": "20", "token": "USDT_TRC20", "simulate": "confirmed"})
         self.assertEqual(payment.simulation.outcome, "confirmed")
         self.assertIn("confirmed", payitgo.SIMULATION_OUTCOMES)
+
+    def test_payment_create_price(self):
+        self.reply(201, PRICED)
+        payment = self.client.payments.create("ORD-10", price_amount=decimal.Decimal("45.50"), price_currency="eur")
+        # The amount goes as a string, like amount_usd, and no amount_usd with it.
+        self.assertEqual(self.request()["body"], {"order_id": "ORD-10", "price_amount": "45.50", "price_currency": "eur"})
+        self.assertEqual(payment, PRICED)
+        self.assertEqual((payment.price_amount, payment.price_currency, payment.price_rate, payment.usd_amount),
+                         ("45.5", "EUR", "1.082", "49.23"))
+        # amount_usd still works as before, positionally too, and sends no price.
+        self.client.payments.create("ORD-11", "10", "USDT_TRC20")
+        self.assertEqual(self.request(1)["body"], {"order_id": "ORD-11", "amount_usd": "10", "token": "USDT_TRC20"})
+        # A payment priced in dollars has none of the price fields.
+        self.reply(200, CHOSEN)
+        self.assertNotIn("price_amount", self.client.payments.retrieve("pay_1"))
+
+    def test_payment_create_price_no_rate(self):
+        self.reply(503, {"error": "exchange rate unavailable for price_currency: try again shortly"})
+        with self.assertRaises(payitgo.PayitgoError) as ctx:
+            self.client.payments.create("ORD-10", price_amount="45.50", price_currency="EUR")
+        self.assertEqual((ctx.exception.status, ctx.exception.message),
+                         (503, "exchange rate unavailable for price_currency: try again shortly"))
 
 
 class ClientConstructEventTest(unittest.TestCase):

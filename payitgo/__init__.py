@@ -137,17 +137,26 @@ class _Payments:
     def __init__(self, client):
         self._client = client
 
-    def create(self, order_id, amount_usd, token=None, webhook_url=None, **optional):
+    def create(self, order_id, amount_usd=None, token=None, webhook_url=None, *, price_amount=None,
+               price_currency=None, **optional):
         """Creates a payment. Safe to retry: an order with an open payment returns that payment.
 
-        Leave token out to let the customer choose the coin on the checkout page.
-        webhook_url (https) gets the payment's events instead of the webhook's URL,
-        signed with the same secret (default: the client's webhook_url).
+        Give the price as amount_usd, or as price_amount in price_currency (an ISO 4217
+        code such as "EUR", "GBP" or "NGN"), which payitgo converts into dollars at the
+        rate of the moment. Leave token out to let the customer choose the coin on the
+        checkout page. webhook_url (https) gets the payment's events instead of the
+        webhook's URL, signed with the same secret (default: the client's webhook_url).
         Optional fields: tokens (the coins to offer), description, metadata,
         customer_email, success_url, cancel_url, and simulate (test keys only: the
         outcome to simulate, as payments.simulate does, once the payment has its coin).
         """
-        body = {"order_id": order_id, "amount_usd": str(amount_usd)}
+        body = {"order_id": order_id}
+        if amount_usd is not None:
+            body["amount_usd"] = str(amount_usd)
+        if price_amount is not None:
+            body["price_amount"] = str(price_amount)
+        if price_currency is not None:
+            body["price_currency"] = price_currency
         if token:
             body["token"] = token
         webhook_url = webhook_url if webhook_url is not None else self._client._webhook_url
