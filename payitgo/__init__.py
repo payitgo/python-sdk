@@ -166,12 +166,12 @@ class _Payments:
         return self._client._request("POST", "/v1/payments", body)
 
     def retrieve(self, id):
-        """A payment by its id (pay_…) or by your order id (the order's open payment)."""
+        """A payment by its id or by your order id (the order's open payment)."""
         return self._client._request("GET", "/v1/payments/" + urllib.parse.quote(id, safe=""))
 
     def select_token(self, payment_id, token):
         """Sets the coin of a payment created without one, when the customer chose it on your
-        own page: one of its token_options. payment_id is the payment's id (pay_…) or your order id.
+        own page: one of its token_options. payment_id is the payment's id or your order id.
 
         Returns the whole payment, now with its address, amount, locked rate and a deadline
         15 minutes away. The coin is chosen once: choosing again is a 409.
@@ -182,7 +182,7 @@ class _Payments:
     def simulate(self, payment_id, outcome):
         """Plays an outcome (one of SIMULATION_OUTCOMES) on a test payment: payitgo sends its
         deposits, status changes and webhooks a few seconds apart, with no coins. payment_id
-        is the payment's id (pay_…) or your order id.
+        is the payment's id or your order id.
 
         Returns the whole payment, with its simulation. A live payment is a 400; a simulation
         that is still running, a 409.

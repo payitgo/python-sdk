@@ -189,10 +189,10 @@ client.livemode                                    # False for sk_test_ keys
 client.payments.create(order_id, amount_usd, token, webhook_url=None, description=None, metadata=None,
                        customer_email=None, success_url=None, cancel_url=None, simulate=None)
 client.payments.create(order_id, price_amount=…, price_currency=…, …)  # priced in another currency
-client.payments.select_token("pay_…", token)       # or your order id: the payment with its coin
-client.payments.simulate("pay_…", "confirmed")     # test keys: plays the outcome
-client.payments.retrieve("pay_…")                  # or your order id
-client.payments.list(status="confirmed", store_id="sto_…", limit=50, offset=0)  # every filter optional
+client.payments.select_token(payment_id, token)    # or your order id: the payment with its coin
+client.payments.simulate(payment_id, "confirmed")  # test keys: plays the outcome
+client.payments.retrieve(payment_id)               # or your order id
+client.payments.list(status="confirmed", store_id=store_id, limit=50, offset=0) # every filter optional
 client.tokens.list()                               # [{token, chain, min_usd, network_fee_usd, fee_note}]
 client.tokens.list(amount_usd="49.90")             # the coins a $49.90 payment offers, with amount_due_usd
 client.checkout.retrieve(checkout_token)           # public payer view
