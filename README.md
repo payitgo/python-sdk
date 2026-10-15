@@ -20,7 +20,7 @@ from flask import Flask, abort, redirect, request
 client = payitgo.Client(
     os.environ["PAYITGO_KEY"],
     base_url=os.environ["PAYITGO_BASE_URL"],
-    webhook_secret=os.environ["PAYITGO_WEBHOOK_SECRET"],  # "whsec_…": see Webhooks (IPN) below
+    webhook_secret=os.environ["PAYITGO_WEBHOOK_SECRET"],  # the signing secret: see Webhooks (IPN) below
 )
 app = Flask(__name__)
 
@@ -49,8 +49,10 @@ def ipn():
     return "", 200
 ```
 
-Start with your test key (`sk_test_…`), where you [simulate](#test-mode) what the customer
-pays; switch to the live key (`sk_live_…`) when the account owner has turned live mode on.
+Start with a test key, where you [simulate](#test-mode) what the customer pays; switch to
+a live key when the account owner has turned live mode on. A key does not say its mode
+(the dashboard shows a Test or Live badge next to it): `client.is_live()` asks payitgo,
+once.
 
 ## Prices in other currencies
 
@@ -117,8 +119,8 @@ payment = client.payments.simulate("TEST-2", "partially_paid")
 
 Outcomes (`payitgo.SIMULATION_OUTCOMES`): `confirmed`, `overpaid`, `partially_paid`,
 `underpaid`, `expired`, `failed`, `wrong_asset`, `paid_late`. Simulated deposits have
-`"simulated": True` and a `tx_id` starting with `sim_`. A live key gets `400`; a payment
-whose simulation is still running, `409`.
+`"simulated": True`; their `tx_id` names no transaction on any chain. A live key gets
+`400`; a payment whose simulation is still running, `409`.
 
 ## Webhooks (IPN)
 
@@ -143,8 +145,8 @@ shop = payitgo.Client(os.environ["PAYITGO_KEY"], webhook_url="https://shop.examp
 A storefront's key cannot set the account's URL (`403`): pass `webhook_url` instead.
 Payout events always go to the webhook's URL.
 
-**The signing secret.** Every notification of a mode is signed with that mode's secret
-(`whsec_…`), whichever URL it goes to. Copy it from the dashboard or read it with
+**The signing secret.** Every notification of a mode is signed with that mode's secret,
+whichever URL it goes to. Copy it from the dashboard or read it with
 `client.webhooks.get().secret`, and give it to the client once:
 
 ```python
@@ -182,10 +184,10 @@ URL and returns its delivery (`400` when no URL is set).
 ```python
 client = payitgo.Client(api_key, base_url="https://api.example.com",  # or PAYITGO_BASE_URL
                       timeout=30, max_retries=2,                    # network errors, 429, 5xx
-                      webhook_secret="whsec_…",                     # for webhooks.construct_event
+                      webhook_secret=secret,                        # for webhooks.construct_event
                       webhook_url="https://…")                      # default webhook_url of payments.create
 
-client.livemode                                    # False for sk_test_ keys
+client.is_live()                                   # False for a test key (asks payitgo once)
 client.payments.create(order_id, amount_usd, token, webhook_url=None, description=None, metadata=None,
                        customer_email=None, success_url=None, cancel_url=None, simulate=None)
 client.payments.create(order_id, price_amount=…, price_currency=…, …)  # priced in another currency

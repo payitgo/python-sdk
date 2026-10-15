@@ -12,10 +12,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import payitgo  # noqa: E402
 
+KEY = "8334dfeae25b9b200b75995e6e55cf8c3602120c1920bfef7a4ff8900b620881"
+
 # Signed by the gateway's own signer.
-SECRET = "whsec_test_secret"
-HEADER = "t=1760000000,v1=6abd292fdf2ecc51779c161f5d4be2d47236f7a43fbaa9dd7093303904b91a7b"
-BODY = b'{"id":"evt_test_123","type":"payment.confirmed","livemode":false,"created_at":"2026-10-09T12:00:00Z","data":{"id":"pay_123","order_id":"ORD-1","status":"confirmed","usd_amount":"10"}}'
+SECRET = "05bd6b428158318cc38756fa34aa60795af0fc5d9a316dcc9b060c8ca1863fc3"
+HEADER = "t=1760000000,v1=75eb20fb34bccab4b9121285930b076e5e60ccad0a2542bd76eb56d89744faed"
+BODY = b'{"id":"b8e1f80bd70ae0784c7855a4","type":"payment.confirmed","livemode":false,"created_at":"2026-10-09T12:00:00Z","data":{"id":"040ffd5925d40e11c67b7238","order_id":"ORD-1","status":"confirmed","usd_amount":"10"}}'
+OTHER_SECRET = "bd4106123e659e259c401119d0c7ef0a221df306a5a414b6fb6a579499962d26"
 
 
 def sign(secret, t, body):
@@ -30,12 +33,12 @@ class WebhookTest(unittest.TestCase):
         self.assertFalse(event.livemode)
 
     def test_accepts_str_body(self):
-        self.assertEqual(payitgo.Webhook.construct_event(BODY.decode(), HEADER, SECRET, tolerance=0)["id"], "evt_test_123")
+        self.assertEqual(payitgo.Webhook.construct_event(BODY.decode(), HEADER, SECRET, tolerance=0)["id"], "b8e1f80bd70ae0784c7855a4")
 
     def test_rejects(self):
         for body, header, secret in [
             (BODY.replace(b'"10"', b'"1000"'), HEADER, SECRET),
-            (BODY, HEADER, "whsec_other"),
+            (BODY, HEADER, OTHER_SECRET),
             (BODY, None, SECRET),
         ]:
             with self.assertRaises(payitgo.SignatureVerificationError):
@@ -49,32 +52,32 @@ class WebhookTest(unittest.TestCase):
         header = "t=soon,v1=" + hmac.new(SECRET.encode(), b"soon." + BODY, hashlib.sha256).hexdigest()
         with self.assertRaisesRegex(payitgo.SignatureVerificationError, "malformed timestamp"):
             payitgo.Webhook.construct_event(BODY, header, SECRET)
-        self.assertEqual(payitgo.Webhook.construct_event(BODY, header, SECRET, tolerance=0).id, "evt_test_123")
+        self.assertEqual(payitgo.Webhook.construct_event(BODY, header, SECRET, tolerance=0).id, "b8e1f80bd70ae0784c7855a4")
 
     def test_tolerance(self):
         with self.assertRaises(payitgo.SignatureVerificationError):
             payitgo.Webhook.construct_event(BODY, HEADER, SECRET)
         fresh = sign(SECRET, int(time.time()), BODY)
-        self.assertEqual(payitgo.Webhook.construct_event(BODY, fresh, SECRET).id, "evt_test_123")
+        self.assertEqual(payitgo.Webhook.construct_event(BODY, fresh, SECRET).id, "b8e1f80bd70ae0784c7855a4")
 
 
 class ClientTest(unittest.TestCase):
     def test_checks(self):
         os.environ.pop("PAYITGO_BASE_URL", None)
-        with self.assertRaises(ValueError):
-            payitgo.Client("pk_123", base_url="http://x")
+        for key in ("", "  ", None):
+            with self.assertRaisesRegex(ValueError, "the API key is required"):
+                payitgo.Client(key, base_url="http://x")
         # Without an address the client uses the release's default, or refuses.
         if payitgo.DEFAULT_BASE_URL:
-            self.assertEqual(payitgo.Client("sk_test_abc")._base_url, payitgo.DEFAULT_BASE_URL.rstrip("/"))
+            self.assertEqual(payitgo.Client(KEY)._base_url, payitgo.DEFAULT_BASE_URL.rstrip("/"))
         else:
             with self.assertRaises(ValueError):
-                payitgo.Client("sk_test_abc")
-        self.assertFalse(payitgo.Client("sk_test_abc", base_url="http://x").livemode)
-        self.assertTrue(payitgo.Client("sk_live_abc", base_url="http://x").livemode)
+                payitgo.Client(KEY)
+        self.assertFalse(hasattr(payitgo.Client(KEY, base_url="http://x"), "livemode"))
 
 
 WEBHOOK = {
-    "livemode": False, "url": "https://shop.example/payitgo/ipn", "secret": "whsec_" + "ab" * 32,
+    "livemode": False, "url": "https://shop.example/payitgo/ipn", "secret": "ab" * 32,
     "created_at": "2026-10-10T09:00:00Z", "updated_at": "2026-10-10T09:05:00Z",
 }
 DELIVERY = {
@@ -105,7 +108,7 @@ SIMULATED = {
     "fees_paid_by_customer": False, "network_fee": "1", "network_fee_usd": "0.3", "settlement": "custodial",
     "received_usd": "20", "rate_locked": "1",
     "deposits": [{
-        "tx_id": "sim_pay_2_1791817211348_0", "token": "USDT_TRC20", "chain": "tron", "amount": "20",
+        "tx_id": "8de0120d502929788a71a7b7cf60e5ef3c095cdbb05cd8a7ddabc0bc9ffa9582", "token": "USDT_TRC20", "chain": "tron", "amount": "20",
         "usd_value": "20", "counted": True, "status": "pending", "seen_at": "2026-10-10T12:00:05Z", "simulated": True,
     }],
     "expires_at": "2026-10-10T12:15:00Z", "created_at": "2026-10-10T12:00:00Z",
@@ -158,8 +161,8 @@ class WebhookIPNTest(unittest.TestCase):
         self.client = self.make_client()
 
     def make_client(self, **options):
-        return payitgo.Client("sk_test_abc", base_url="http://127.0.0.1:%d/" % self.server.server_port,
-                            max_retries=0, **options)
+        return payitgo.Client(KEY, base_url="http://127.0.0.1:%d/" % self.server.server_port,
+                              max_retries=0, **options)
 
     def reply(self, status, body):
         self.server.replies.append((status, body))
@@ -181,9 +184,32 @@ class WebhookIPNTest(unittest.TestCase):
         webhook = self.client.webhooks.get()
         req = self.request()
         self.assertEqual((req["method"], req["path"], req["body"]), ("GET", "/v1/webhook", None))
-        self.assertEqual(req["headers"]["Authorization"], "Bearer sk_test_abc")
+        self.assertEqual(req["headers"]["Authorization"], "Bearer " + KEY)
         self.assertEqual(webhook, WEBHOOK)
         self.assertEqual(webhook.secret, WEBHOOK["secret"])
+
+    def test_is_live(self):
+        for live in (True, False):
+            client = self.make_client()
+            self.server.requests.clear()
+            self.reply(200, {"webhook": dict(WEBHOOK, livemode=live)})
+            self.assertIs(client.is_live(), live)
+            req = self.request()
+            self.assertEqual((req["method"], req["path"]), ("GET", "/v1/webhook"))
+            self.assertEqual(req["headers"]["Authorization"], "Bearer " + KEY)
+            # The second call does not ask again (no reply is queued: asking would fail).
+            self.assertIs(client.is_live(), live)
+            self.assertEqual(len(self.server.requests), 1)
+
+    def test_is_live_error(self):
+        self.reply(401, {"error": "invalid API key"})
+        with self.assertRaises(payitgo.PayitgoError) as ctx:
+            self.client.is_live()
+        self.assertEqual((ctx.exception.status, ctx.exception.message), (401, "invalid API key"))
+        # An error is not kept: the next call asks again.
+        self.reply(200, {"webhook": WEBHOOK})
+        self.assertIs(self.client.is_live(), False)
+        self.assertEqual(len(self.server.requests), 2)
 
     def test_set(self):
         self.reply(200, {"webhook": WEBHOOK})
@@ -206,7 +232,7 @@ class WebhookIPNTest(unittest.TestCase):
         delivery = self.client.webhooks.test()
         req = self.request()
         self.assertEqual((req["method"], req["path"]), ("POST", "/v1/webhook/test"))
-        self.assertEqual(req["headers"]["Authorization"], "Bearer sk_test_abc")
+        self.assertEqual(req["headers"]["Authorization"], "Bearer " + KEY)
         self.assertEqual((delivery.event_type, delivery.status, delivery.target), ("ping", "pending", "account"))
 
     def test_errors(self):
@@ -243,7 +269,7 @@ class WebhookIPNTest(unittest.TestCase):
         payment = self.client.payments.select_token("pay_1", "XRP")
         req = self.request()
         self.assertEqual((req["method"], req["path"]), ("POST", "/v1/payments/pay_1/token"))
-        self.assertEqual(req["headers"]["Authorization"], "Bearer sk_test_abc")
+        self.assertEqual(req["headers"]["Authorization"], "Bearer " + KEY)
         self.assertEqual(req["headers"]["Content-Type"], "application/json")
         self.assertEqual(req["body"], {"token": "XRP"})
         self.assertEqual(payment, CHOSEN)
@@ -277,7 +303,7 @@ class WebhookIPNTest(unittest.TestCase):
         payment = self.client.payments.simulate("pay_2", "confirmed")
         req = self.request()
         self.assertEqual((req["method"], req["path"]), ("POST", "/v1/payments/pay_2/simulate"))
-        self.assertEqual(req["headers"]["Authorization"], "Bearer sk_test_abc")
+        self.assertEqual(req["headers"]["Authorization"], "Bearer " + KEY)
         self.assertEqual(req["headers"]["Content-Type"], "application/json")
         self.assertEqual(req["body"], {"outcome": "confirmed"})
         self.assertEqual(payment, SIMULATED)
@@ -328,19 +354,19 @@ class WebhookIPNTest(unittest.TestCase):
 
 class ClientConstructEventTest(unittest.TestCase):
     def test_client_secret(self):
-        client = payitgo.Client("sk_test_abc", base_url="http://x", webhook_secret=SECRET)
-        self.assertEqual(client.webhooks.construct_event(BODY, HEADER, tolerance=0).id, "evt_test_123")
+        client = payitgo.Client(KEY, base_url="http://x", webhook_secret=SECRET)
+        self.assertEqual(client.webhooks.construct_event(BODY, HEADER, tolerance=0).id, "b8e1f80bd70ae0784c7855a4")
         fresh = sign(SECRET, int(time.time()), BODY)
-        self.assertEqual(client.webhooks.construct_event(BODY, fresh).id, "evt_test_123")
+        self.assertEqual(client.webhooks.construct_event(BODY, fresh).id, "b8e1f80bd70ae0784c7855a4")
 
     def test_explicit_secret_wins(self):
-        client = payitgo.Client("sk_test_abc", base_url="http://x", webhook_secret="whsec_other")
+        client = payitgo.Client(KEY, base_url="http://x", webhook_secret=OTHER_SECRET)
         with self.assertRaises(payitgo.SignatureVerificationError):
             client.webhooks.construct_event(BODY, HEADER, tolerance=0)
-        self.assertEqual(client.webhooks.construct_event(BODY, HEADER, SECRET, tolerance=0).id, "evt_test_123")
+        self.assertEqual(client.webhooks.construct_event(BODY, HEADER, SECRET, tolerance=0).id, "b8e1f80bd70ae0784c7855a4")
 
     def test_no_secret(self):
-        client = payitgo.Client("sk_test_abc", base_url="http://x")
+        client = payitgo.Client(KEY, base_url="http://x")
         with self.assertRaisesRegex(payitgo.SignatureVerificationError, "no webhook secret"):
             client.webhooks.construct_event(BODY, HEADER)
 

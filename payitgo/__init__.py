@@ -71,16 +71,16 @@ def _wrap(value):
 
 
 class Client:
-    """The payitgo client, for one secret key (``sk_test_…`` or ``sk_live_…``).
+    """The payitgo client, for one secret key, test or live (``is_live()`` says which).
 
-    ``webhook_secret`` is the signing secret of the key's mode (``whsec_…``), which
+    ``webhook_secret`` is the signing secret of the key's mode, which
     ``webhooks.construct_event`` uses when given none; ``webhook_url`` is sent as the
     ``webhook_url`` of every payment this client creates without its own.
     """
 
     def __init__(self, api_key, base_url=None, timeout=30, max_retries=2, webhook_secret=None, webhook_url=None):
-        if not isinstance(api_key, str) or not api_key.startswith(("sk_test_", "sk_live_")):
-            raise ValueError("payitgo: the API key must start with sk_test_ or sk_live_")
+        if not isinstance(api_key, str) or not api_key.strip():
+            raise ValueError("payitgo: the API key is required")
         base_url = base_url or os.environ.get("PAYITGO_BASE_URL") or DEFAULT_BASE_URL
         if not base_url:
             raise ValueError("payitgo: set base_url (or PAYITGO_BASE_URL) to your gateway's address")
@@ -90,12 +90,22 @@ class Client:
         self._max_retries = max_retries
         self._webhook_secret = webhook_secret or None
         self._webhook_url = webhook_url or None
-        #: False for a test key, True for a live key.
-        self.livemode = api_key.startswith("sk_live_")
+        self._live = None  # the key's mode, once payitgo has said it
         self.payments = _Payments(self)
         self.tokens = _Tokens(self)
         self.checkout = _Checkout(self)
         self.webhooks = _Webhooks(self)
+
+    def is_live(self):
+        """Whether the key is a live key (its payments are real) rather than a test key.
+
+        payitgo says which (``GET /v1/webhook``'s ``livemode``) the first time; the answer is
+        kept for the client's life. Raises PayitgoError when payitgo refuses the key or cannot
+        be reached.
+        """
+        if self._live is None:
+            self._live = bool(self.webhooks.get()["livemode"])
+        return self._live
 
     def _request(self, method, path, body=None, authenticated=True):
         headers = {"Accept": "application/json", "User-Agent": "payitgo-python/" + __version__}
