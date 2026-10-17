@@ -97,9 +97,10 @@ chosen = client.payments.select_token(payment.id, "USDT_TRC20")  # or your order
 # render chosen.deposit_address, chosen.crypto_amount, chosen.qr_payload, chosen.expires_at
 ```
 
-The coin is chosen once: choosing again is a `409` (`payments.retrieve` then returns the
-payment with its coin). A coin outside `token_options`, or a payment that can no longer be
-paid, is a `400`.
+The customer can change the coin while the payment still has `token_options` (nothing has
+arrived yet): call `payments.select_token` again with another. Once it can no longer change, it is a `409`
+(`payments.retrieve` then returns the payment with its coin). A coin outside `token_options`, or a
+payment that can no longer be paid, is a `400`.
 
 ## Test mode
 

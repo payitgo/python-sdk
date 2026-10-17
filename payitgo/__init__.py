@@ -184,7 +184,8 @@ class _Payments:
         own page: one of its token_options. payment_id is the payment's id or your order id.
 
         Returns the whole payment, now with its address, amount, locked rate and a deadline
-        15 minutes away. The coin is chosen once: choosing again is a 409.
+        15 minutes away. Another coin changes it while the payment still has token_options;
+        once it can no longer change, a 409.
         """
         return self._client._request("POST", "/v1/payments/" + urllib.parse.quote(payment_id, safe="") + "/token",
                                      {"token": token})

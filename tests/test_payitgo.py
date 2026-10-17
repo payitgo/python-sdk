@@ -292,11 +292,11 @@ class WebhookIPNTest(unittest.TestCase):
         self.assertEqual(self.request(1)["path"], "/v1/payments")
 
     def test_payment_select_token_chosen(self):
-        self.reply(409, {"error": "the coin for this payment has already been chosen"})
+        self.reply(409, {"error": "the coin for this payment can no longer be changed"})
         with self.assertRaises(payitgo.PayitgoError) as ctx:
             self.client.payments.select_token("pay_1", "XRP")
         self.assertEqual((ctx.exception.status, ctx.exception.message),
-                         (409, "the coin for this payment has already been chosen"))
+                         (409, "the coin for this payment can no longer be changed"))
 
     def test_payment_simulate(self):
         self.reply(200, SIMULATED)
