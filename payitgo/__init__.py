@@ -18,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = ["Client", "Webhook", "PayitgoError", "SignatureVerificationError", "PayitgoObject", "WEBHOOK_EVENTS",
            "SIMULATION_OUTCOMES"]
 
