@@ -126,8 +126,9 @@ Outcomes (`payitgo.SIMULATION_OUTCOMES`): `confirmed`, `overpaid`, `partially_pa
 ## Webhooks (IPN)
 
 payitgo POSTs a signed notification for every change of a payment (`payment.confirmed`,
-`payment.expired`, …), of a direct settlement and of a payout. Each mode has one webhook:
-a test key manages the test one, a live key the live one.
+`payment.expired`, …), of a direct settlement, of a payout and of your
+[payouts to your clients](#payouts). Each mode has one webhook: a test key manages the test
+one, a live key the live one.
 
 **Where the notifications go.** Set the URL once per mode (https:// on a public host,
 accepting POST requests), or give a payment its own when you create it:
@@ -144,7 +145,8 @@ shop = payitgo.Client(os.environ["PAYITGO_KEY"], webhook_url="https://shop.examp
 ```
 
 A storefront's key cannot set the account's URL (`403`): pass `webhook_url` instead.
-Payout events always go to the webhook's URL.
+Payout events always go to the webhook's URL, except a payout batch's when it has its own
+`webhook_url`.
 
 **The signing secret.** Every notification of a mode is signed with that mode's secret,
 whichever URL it goes to. Copy it from the dashboard or read it with
@@ -180,6 +182,186 @@ def ipn():
 **Testing it.** `client.webhooks.test()` queues a signed `ping` event to the webhook's
 URL and returns its delivery (`400` when no URL is set).
 
+## Payouts
+
+Pay your own clients (withdrawals from your platform, prizes, payroll) from your **payout
+wallet**: one address per network, yours alone, that you top up. Each payment costs 0.5% (at
+least $0.50) plus its network fee; the coins it pays in, such as `USDT_TRC20` or `USDT_BEP20`,
+are listed in [Mass payouts](https://api.payitgo.co/docs/payouts).
+
+Reading works with any key. Everything that changes something needs a key with **payouts**
+turned on in the dashboard; any other key gets `403` (`this api key cannot make payouts: turn
+payouts on for it in the dashboard`).
+
+### Payout requests, one by one
+
+Send each client's payout request as it comes in. payitgo checks and prices it at once and
+keeps it in your open list, with its costs, until you send the list (or it goes by itself,
+with auto-send in your payout settings):
+
+```python
+import decimal
+
+# A client asked to withdraw 25.50 USDT.
+item = client.payouts.request(
+    asset="USDT_TRC20",
+    address="TR7mNkucnhLZoJQLLJ6DR88jpLQufWxUJi",
+    amount="25.50",               # sent as str(amount): a str or a Decimal, not a float
+    reference="withdrawal-1001",  # your id: sending it again returns this payment (safe to retry)
+    name="Ana Silva",             # optional, with email and note
+)
+if item.status == "invalid":
+    print([e.message for e in item.errors])  # kept, never sent: tell your client why
+else:
+    print(item.fee, item.debit)               # its fees, and what it takes from the wallet
+
+# Your open list, and what sending its valid requests needs of each coin.
+inbox = client.payouts.inbox()
+for c in inbox.coverage:
+    if decimal.Decimal(c.top_up) > 0:
+        print(f"send {c.top_up} {c.asset} to {c.address} first")
+print(len(inbox["items"]), "requests")  # inbox.items is the dict method: use ["items"]
+
+# Send every valid request (or send([id, …]) for some): they become a batch.
+batch = client.payouts.send()
+print(batch.status)  # pending_approval, awaiting_funds or processing
+
+client.payouts.retrieve(item.id)                         # any payment, by its id…
+client.payouts.retrieve_by_reference("withdrawal-1001")  # …or by your reference
+client.payouts.cancel(item.id)  # out of the list, or canceled if sent but not on its way yet
+```
+
+`request` answers the same way the first time (`201`) and on a retry (`200`). To show a
+client their fee before they ask, `client.payouts.quote(items)` prices up to 100 payments
+without keeping anything: `{quote, items}`.
+
+### Batches
+
+A whole list at once, up to 1,000 payments per call and 10,000 per batch:
+
+```python
+batch = client.payout_batches.create(
+    [
+        {"reference": "payroll-2026-10-ana", "asset": "USDT_TRC20",
+         "address": "TR7mNkucnhLZoJQLLJ6DR88jpLQufWxUJi", "amount": "120", "name": "Ana Silva"},
+        {"reference": "payroll-2026-10-ben", "asset": "USDT_BEP20",
+         "address": "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed", "amount": "250"},
+    ],
+    reference="payroll-2026-10",  # a retry returns this batch, with nothing added
+    name="October payroll",
+    # fee_paid_by="recipient",    # fees out of each amount instead of on top
+)
+for row in client.payout_batches.items(batch.id, status="invalid")["items"]:
+    print(row.row, row.errors[0].message)  # left out of the batch
+
+batch = client.payout_batches.submit(batch.id)
+if batch.status == "awaiting_funds" and batch.waiting.reason == "funds":
+    for s in batch.waiting.shortfall:
+        print(f"top up {s.amount} {s.asset} at {s.address}")  # it starts by itself once funded
+```
+
+A batch is `quoted` once checked (one of more than 100 payments comes back `validating`,
+then `payout_batch.quoted` follows). Its prices hold for an hour: past that, `submit` raises
+`409` (`its prices expired: get a new quote first`), so call
+`client.payout_batches.quote(batch.id)` and submit again. Before it is submitted you can
+`add_items`; `cancel` stops it before it is funded, or its payments not sent yet after.
+
+### Claim links
+
+When you don't know the recipient's address, pass `claim=True` (or `claim_assets`) and leave
+the address out: the payment is a **claim link**, and its recipient chooses the coin and the
+address. With an email, payitgo emails them the link; without one, share `item.claim.url`
+yourself. `claim_assets` are the other coins they may choose, paid at the same dollar value.
+An email alone makes no claim link: without an address and `claim=True` the payment is
+`invalid` (`invalid_address`).
+
+```python
+item = client.payouts.request(
+    asset="USDT_TRC20",
+    amount="50",
+    reference="prize-cup-final-1",
+    claim=True,
+    email="winner@example.com",               # optional: the link is emailed here
+    claim_assets=["USDT_BEP20", "USDC_BEP20"],
+)
+# The same in a batch: a row with "claim": True (or "claim_assets") and no "address".
+```
+
+Once its batch is funded, the payment is `claimable` and its money is kept for it until
+`item.claim.expires_at`; claimed, it is paid like any other (`payout_item.claimed`, then
+`payout_item.sent`). Never claimed, it is `expired` and its money is free again
+(`payout_item.claim_expired`). Read `item.claim`: `url`, `email`, `assets`, `expires_at`,
+`claimed_at`, `emailed`, `extended`, and `funded_asset` / `funded_amount` when the recipient
+chose another coin than the one it was funded with. A bad email is an `invalid_email` error.
+
+### Converted payments
+
+To pay recipients in another coin than your wallet holds, set `convert="convert"` on a batch
+or a quote: every payment in another coin than `convert_from` is paid from `convert_from`,
+converted on its way. Both default to your payout settings.
+
+```python
+batch = client.payout_batches.create(
+    [{"reference": "payroll-2026-10-dan", "asset": "BTC",
+      "address": "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", "amount": "0.001"}],
+    reference="payroll-2026-10-btc",
+    convert="convert",
+    convert_from="USDT_TRC20",   # paid from the wallet's USDT on Tron
+)
+item = client.payout_batches.items(batch.id)["items"][0]
+print(item.convert.to, item.convert.to_amount, item.convert.estimate)  # BTC 0.001 0.00100502
+print(item.asset, item.amount, item.debit, item.conversion_fee)  # USDT_TRC20 65 69.442417 2.34
+```
+
+For a converted payment, `asset`, `amount`, `fee` and `debit` are in the wallet's coin
+(`convert_from`) and `conversion_fee` is part of `fee`; `address` is the recipient's on the
+network of `convert.to`. `convert.estimate` is about what arrives, and `convert.amount_out`
+what did, once sent. A batch with converted payments holds its prices for 15 minutes. A coin
+that cannot be converted into right now is a `conversion_unavailable` error.
+
+### The payout wallet
+
+```python
+for wallet in client.payout_wallets.list():  # one per network
+    for a in wallet.assets:
+        print(wallet.network, wallet.address, a.asset, a.spendable, "needed:", a.needed)
+```
+
+`balance` is what the address holds, `reserved` what is promised to funded payments, and
+`spendable` the rest; `needed` is what your batches waiting for funds lack: the top-up to send.
+
+### Payouts in test mode
+
+With a test key, the test wallet is topped up on paper, and payments are sent on paper within
+seconds (a made-up `tx_id`, nothing on chain):
+
+```python
+client.payout_wallets.simulate_top_up("USDT_TRC20", "1000")  # also funds test batches waiting for it
+```
+
+A live key gets `400`.
+
+### Payout webhooks
+
+`payout_batch.quoted`, `.pending_approval`, `.approved`, `.rejected`, `.awaiting_funds`,
+`.processing`, `.completed` and `.canceled` carry the batch; `payout_item.sent`, `.failed`,
+`.canceled`, `.claimed` and `.claim_expired` the payment; `payout_wallet.withdrawn` the
+withdrawal. A batch made with `webhook_url` sends its events there instead of the webhook's
+URL. Schedules (set up in the dashboard) send `payout_schedule.run` with a summary of the
+schedule (its rows left out), and `payout_schedule.funding_needed` with `{schedule, shortfall}`
+a few days before a run the wallet cannot cover; a schedule's batches have `source`
+`"schedule"`.
+
+```python
+# In the handler under Webhooks (IPN), after construct_event and the event id check:
+if event.type == "payout_item.sent":
+    mark_withdrawal_paid(event.data.get("reference"), event.data.tx_id)
+elif event.type in ("payout_item.failed", "payout_item.canceled", "payout_item.claim_expired"):
+    # Its money stays in your wallet. A payment never sent gives its reference back
+    # (released_reference), for a new payment to use.
+    reopen_withdrawal(event.data.get("reference") or event.data.get("released_reference"))
+```
+
 ## API
 
 ```python
@@ -205,12 +387,34 @@ client.webhooks.remove()                           # the webhook, url None (the 
 client.webhooks.test()                             # the delivery of a "ping" event
 client.webhooks.construct_event(raw_body, signature_header, secret=None, tolerance=300)
 payitgo.Webhook.construct_event(raw_body, signature_header, secret, tolerance=300)  # no client needed
+
+client.payouts.request(asset, address, amount, reference=None, tag=None, name=None, email=None, note=None,
+                       claim=None, claim_assets=None)  # claim=True, no address: a claim link
+client.payouts.retrieve(id)                        # a payment: a request or a batch's
+client.payouts.retrieve_by_reference(reference)
+client.payouts.inbox(status=None, limit=None, offset=None)  # {inbox, coverage, items, total, limit, offset}
+client.payouts.send(ids=None)                      # the batch they became
+client.payouts.cancel(id)                          # the payment
+client.payouts.quote(items, fee_paid_by=None, convert=None, convert_from=None)  # {quote, items}, nothing kept
+client.payout_batches.create(items, reference=None, name=None, fee_paid_by=None, webhook_url=None,
+                             convert=None, convert_from=None)
+client.payout_batches.list(status=None, limit=None, offset=None)  # {batches, total, limit, offset}
+client.payout_batches.retrieve(id)
+client.payout_batches.items(id, status=None, limit=None, offset=None)  # {items, total, limit, offset}
+client.payout_batches.add_items(id, items)
+client.payout_batches.quote(id)                    # priced again
+client.payout_batches.submit(id)
+client.payout_batches.cancel(id)
+client.payout_wallets.list()                       # [{chain, network, address, assets, …}]
+client.payout_wallets.simulate_top_up(asset, amount)  # test keys: the wallets
 ```
 
 Responses are dicts that also allow attribute access: `payment["status"]` or
 `payment.status`. Field names are the API's own (see the
-[payment object](https://api.payitgo.co/docs/payments) and [webhooks](https://api.payitgo.co/docs/webhooks)).
-`payitgo.WEBHOOK_EVENTS` lists the event types.
+[payment object](https://api.payitgo.co/docs/payments), [webhooks](https://api.payitgo.co/docs/webhooks)
+and [mass payouts](https://api.payitgo.co/docs/payouts)). A key named like a dict method is
+read with `[]`: `page["items"]`, not `page.items`. Amounts are decimal strings: convert them
+with `decimal.Decimal`. `payitgo.WEBHOOK_EVENTS` lists the event types.
 
 ## Errors
 

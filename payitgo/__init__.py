@@ -18,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __all__ = ["Client", "Webhook", "PayitgoError", "SignatureVerificationError", "PayitgoObject", "WEBHOOK_EVENTS",
            "SIMULATION_OUTCOMES"]
 
@@ -30,6 +30,10 @@ WEBHOOK_EVENTS = (
     "payment.partially_paid", "payment.detecting", "payment.confirmed", "payment.underpaid",
     "payment.expired", "payment.failed", "payment.wrong_asset", "payment.late_deposit",
     "payout.approved", "payout.rejected", "payout.sent", "settlement.completed", "settlement.failed",
+    "payout_batch.quoted", "payout_batch.pending_approval", "payout_batch.approved", "payout_batch.rejected",
+    "payout_batch.awaiting_funds", "payout_batch.processing", "payout_batch.completed", "payout_batch.canceled",
+    "payout_item.sent", "payout_item.failed", "payout_item.canceled", "payout_item.claimed",
+    "payout_item.claim_expired", "payout_wallet.withdrawn", "payout_schedule.run", "payout_schedule.funding_needed",
     "ping",
 )
 
@@ -70,6 +74,23 @@ def _wrap(value):
     return value
 
 
+def _path(value):
+    """An id (or order id, coin) escaped as one segment of a path."""
+    return urllib.parse.quote(value, safe="")
+
+
+def _query(**params):
+    """The query string of the params that are not None ("" when none). A list or tuple
+    is sent comma-separated: status=sent,failed."""
+    params = {k: ",".join(v) if isinstance(v, (list, tuple)) else v for k, v in params.items() if v is not None}
+    return "?" + urllib.parse.urlencode(params, safe=",") if params else ""
+
+
+def _payout_items(items):
+    """Payments as the API takes them: each amount as str(amount), keys set to None left out."""
+    return [{k: str(v) if k == "amount" else v for k, v in item.items() if v is not None} for item in items]
+
+
 class Client:
     """The payitgo client, for one secret key, test or live (``is_live()`` says which).
 
@@ -95,6 +116,9 @@ class Client:
         self.tokens = _Tokens(self)
         self.checkout = _Checkout(self)
         self.webhooks = _Webhooks(self)
+        self.payouts = _Payouts(self)
+        self.payout_batches = _PayoutBatches(self)
+        self.payout_wallets = _PayoutWallets(self)
 
     def is_live(self):
         """Whether the key is a live key (its payments are real) rather than a test key.
@@ -177,7 +201,7 @@ class _Payments:
 
     def retrieve(self, id):
         """A payment by its id or by your order id (the order's open payment)."""
-        return self._client._request("GET", "/v1/payments/" + urllib.parse.quote(id, safe=""))
+        return self._client._request("GET", "/v1/payments/" + _path(id))
 
     def select_token(self, payment_id, token):
         """Sets the coin of a payment created without one, when the customer chose it on your
@@ -187,8 +211,7 @@ class _Payments:
         15 minutes away. Another coin changes it while the payment still has token_options;
         once it can no longer change, a 409.
         """
-        return self._client._request("POST", "/v1/payments/" + urllib.parse.quote(payment_id, safe="") + "/token",
-                                     {"token": token})
+        return self._client._request("POST", "/v1/payments/" + _path(payment_id) + "/token", {"token": token})
 
     def simulate(self, payment_id, outcome):
         """Plays an outcome (one of SIMULATION_OUTCOMES) on a test payment: payitgo sends its
@@ -198,8 +221,7 @@ class _Payments:
         Returns the whole payment, with its simulation. A live payment is a 400; a simulation
         that is still running, a 409.
         """
-        return self._client._request("POST", "/v1/payments/" + urllib.parse.quote(payment_id, safe="") + "/simulate",
-                                     {"outcome": outcome})
+        return self._client._request("POST", "/v1/payments/" + _path(payment_id) + "/simulate", {"outcome": outcome})
 
     def list(self, status=None, chain=None, token=None, limit=None, offset=None, store_id=None):
         """Payments of the key's mode, newest first: {payments, total, limit, offset}.
@@ -207,9 +229,7 @@ class _Payments:
         store_id keeps the payments of one store (ignored for a storefront's key, which
         sees its own).
         """
-        params = {k: v for k, v in {"status": status, "chain": chain, "token": token, "store_id": store_id,
-                                    "limit": limit, "offset": offset}.items() if v is not None}
-        query = "?" + urllib.parse.urlencode(params) if params else ""
+        query = _query(status=status, chain=chain, token=token, store_id=store_id, limit=limit, offset=offset)
         return self._client._request("GET", "/v1/payments" + query)
 
 
@@ -221,8 +241,7 @@ class _Tokens:
         """The tokens a customer can pay with in the key's mode. With amount_usd,
         only the ones a payment of that amount offers (its token_options), each
         with amount_due_usd when fees are passed on."""
-        query = "?" + urllib.parse.urlencode({"amount_usd": str(amount_usd)}) if amount_usd is not None else ""
-        return self._client._request("GET", "/v1/tokens" + query)["tokens"]
+        return self._client._request("GET", "/v1/tokens" + _query(amount_usd=amount_usd))["tokens"]
 
 
 class _Checkout:
@@ -231,13 +250,12 @@ class _Checkout:
 
     def retrieve(self, checkout_token):
         """The payer's view of a payment, by its checkout token. Public: sent without the API key."""
-        return self._client._request("GET", "/checkout/" + urllib.parse.quote(checkout_token, safe=""),
-                                     authenticated=False)
+        return self._client._request("GET", "/checkout/" + _path(checkout_token), authenticated=False)
 
     def select_token(self, checkout_token, token):
         """The customer's choice of coin for a payment created without one. Public."""
-        return self._client._request("POST", "/checkout/" + urllib.parse.quote(checkout_token, safe="") + "/token",
-                                     {"token": token}, authenticated=False)
+        return self._client._request("POST", "/checkout/" + _path(checkout_token) + "/token", {"token": token},
+                                     authenticated=False)
 
 
 class _Webhooks:
@@ -277,6 +295,164 @@ class _Webhooks:
         if tolerance is None:
             tolerance = Webhook.DEFAULT_TOLERANCE
         return Webhook.construct_event(payload, signature_header, secret, tolerance)
+
+
+class _Payouts:
+    """Payout requests: your clients' payouts, sent one by one as they come in. payitgo checks
+    and prices each into your open list, and sends the list when you say (or by itself, with
+    auto-send in your payout settings) from your payout wallet. Writes need a key with
+    payouts turned on in the dashboard; reads work with any key."""
+
+    def __init__(self, client):
+        self._client = client
+
+    def request(self, asset, address=None, amount=None, reference=None, *, tag=None, name=None, email=None,
+                note=None, claim=None, claim_assets=None):
+        """Adds one client's payout request to your open list, checked and priced at once.
+
+        Safe to retry with a reference: one that another payment carries already returns that
+        payment instead of a second one. An invalid request is still kept (status "invalid",
+        its errors say why) and is never sent. amount (required) is sent as str(amount): give a
+        str or a Decimal. Returns the payment.
+
+        With claim=True (or claim_assets) and no address it is a claim link: its recipient
+        chooses where to receive it, in asset or one of claim_assets (at the same dollar value).
+        With an email the link is emailed there; without one, share the payment's claim.url.
+        An email alone makes no claim link: without an address the request is invalid.
+        """
+        if amount is None:
+            raise TypeError("payouts.request() missing required argument: 'amount'")
+        body = {"asset": asset, "amount": str(amount)}
+        body.update({k: v for k, v in {"address": address, "reference": reference, "tag": tag, "name": name,
+                                       "email": email, "note": note, "claim": claim,
+                                       "claim_assets": claim_assets}.items() if v is not None})
+        return self._client._request("POST", "/v1/payouts", body)["item"]
+
+    def retrieve(self, id):
+        """A payment by its id: a payout request, or a payment of a batch."""
+        return self._client._request("GET", "/v1/payouts/" + _path(id))["item"]
+
+    def retrieve_by_reference(self, reference):
+        """A payment by your reference for it: a payout request, or a payment of a batch."""
+        return self._client._request("GET", "/v1/payouts" + _query(reference=reference))["item"]
+
+    def inbox(self, status=None, limit=None, offset=None):
+        """Your open list: {inbox, coverage, items, total, limit, offset}.
+
+        inbox is the list as a batch (its totals and counts), coverage what sending its valid
+        requests needs of each coin against what the wallet can spend (top_up: what to send to
+        address first), items the requests themselves, read as page["items"]. status is one
+        status or a list of them.
+        """
+        return self._client._request("GET", "/v1/payouts/inbox" + _query(status=status, limit=limit, offset=offset))
+
+    def send(self, ids=None):
+        """Sends your open list: every valid request, or only those of ids. They move into a
+        batch of their own, priced again and submitted (it then waits for approvals or funds,
+        or starts). Returns that batch; invalid requests stay in the list.
+        """
+        body = None
+        if ids is not None:
+            ids = [ids] if isinstance(ids, str) else list(ids)
+            if not ids:
+                raise ValueError("payitgo: ids is empty: pass None to send every valid request")
+            body = {"ids": ids}
+        return self._client._request("POST", "/v1/payouts/send", body)["batch"]
+
+    def cancel(self, id):
+        """Takes a request out: one still in your open list is removed (its reference free
+        again); one sent but not on its way yet is canceled. Returns the payment."""
+        return self._client._request("DELETE", "/v1/payouts/" + _path(id))["item"]
+
+    def quote(self, items, fee_paid_by=None, *, convert=None, convert_from=None):
+        """Prices up to 100 payments exactly as a batch would, keeping nothing: {quote, items}.
+
+        Each item is a dict with asset, address and amount, and optionally reference, tag, name,
+        email, note, claim and claim_assets (claim=True and no address: a claim link). fee_paid_by is "merchant"
+        (fees on top) or "recipient" (fees out of each amount); convert is "same_network" or
+        "convert" (payments in another coin than convert_from paid from convert_from, converted
+        on their way). Each defaults to your payout settings'.
+        """
+        body = {"items": _payout_items(items)}
+        body.update({k: v for k, v in {"fee_paid_by": fee_paid_by, "convert": convert,
+                                       "convert_from": convert_from}.items() if v is not None})
+        return self._client._request("POST", "/v1/payout-quotes", body)
+
+
+class _PayoutBatches:
+    """Batches: a whole list of payments at once, checked and priced, then submitted.
+    Writes need a key with payouts turned on in the dashboard; reads work with any key."""
+
+    def __init__(self, client):
+        self._client = client
+
+    def create(self, items, reference=None, *, name=None, fee_paid_by=None, webhook_url=None, convert=None,
+               convert_from=None):
+        """Makes a batch of 1 to 1000 payments (each a dict, as payouts.quote takes them).
+
+        Safe to retry with a reference: one used already returns that batch, with nothing
+        added. webhook_url (https) gets the batch's events instead of the webhook's URL.
+        fee_paid_by, convert and convert_from are as payouts.quote takes them. Returns the
+        batch: "quoted", or "validating" past 100 payments.
+        """
+        body = {"items": _payout_items(items)}
+        body.update({k: v for k, v in {"reference": reference, "name": name, "fee_paid_by": fee_paid_by,
+                                       "webhook_url": webhook_url, "convert": convert,
+                                       "convert_from": convert_from}.items() if v is not None})
+        return self._client._request("POST", "/v1/payout-batches", body)["batch"]
+
+    def list(self, status=None, limit=None, offset=None):
+        """Batches of the key's mode, newest first: {batches, total, limit, offset}."""
+        return self._client._request("GET", "/v1/payout-batches" + _query(status=status, limit=limit, offset=offset))
+
+    def retrieve(self, id):
+        """A batch by its id."""
+        return self._client._request("GET", "/v1/payout-batches/" + _path(id))["batch"]
+
+    def items(self, id, status=None, limit=None, offset=None):
+        """A batch's payments in row order: {items, total, limit, offset}, read as page["items"].
+        status is one status or a list of them."""
+        query = _query(status=status, limit=limit, offset=offset)
+        return self._client._request("GET", "/v1/payout-batches/" + _path(id) + "/items" + query)
+
+    def add_items(self, id, items):
+        """Adds 1 to 1000 payments to a batch not submitted yet, which is priced again.
+        Returns the batch."""
+        return self._client._request("POST", "/v1/payout-batches/" + _path(id) + "/items",
+                                     {"items": _payout_items(items)})["batch"]
+
+    def quote(self, id):
+        """Prices a batch not submitted yet again, at today's prices (they hold for an hour).
+        Returns the batch."""
+        return self._client._request("POST", "/v1/payout-batches/" + _path(id) + "/quote")["batch"]
+
+    def submit(self, id):
+        """Submits a quoted batch: it waits for its approvals and its funds, or starts.
+        Returns the batch."""
+        return self._client._request("POST", "/v1/payout-batches/" + _path(id) + "/submit")["batch"]
+
+    def cancel(self, id):
+        """Cancels a batch before it is funded, or its payments not sent yet once it is.
+        Returns the batch."""
+        return self._client._request("POST", "/v1/payout-batches/" + _path(id) + "/cancel")["batch"]
+
+
+class _PayoutWallets:
+    """Your payout wallet: one address per network, yours alone, that you top up."""
+
+    def __init__(self, client):
+        self._client = client
+
+    def list(self):
+        """The wallet of the key's mode, one per network, each with what it holds of each coin
+        (balance, reserved, spendable, needed)."""
+        return self._client._request("GET", "/v1/payout-wallets")["wallets"]
+
+    def simulate_top_up(self, asset, amount):
+        """Test keys only: adds amount (sent as str(amount)) of asset to the test wallet on
+        paper, and funds any test batch waiting for it. Returns the wallets."""
+        return self._client._request("POST", "/v1/payout-wallets/" + _path(asset) + "/simulate-top-up",
+                                     {"amount": str(amount)})["wallets"]
 
 
 class Webhook:
