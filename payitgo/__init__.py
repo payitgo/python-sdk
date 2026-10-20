@@ -317,7 +317,8 @@ class _Payouts:
 
         With claim=True (or claim_assets) and no address it is a claim link: its recipient
         chooses where to receive it, in asset or one of claim_assets (at the same dollar value).
-        With an email the link is emailed there; without one, share the payment's claim.url.
+        With an email the link is emailed there; without one, share the payment's claim.url,
+        and give its claim.pin another way (the recipient enters it to claim).
         An email alone makes no claim link: without an address the request is invalid.
         """
         if amount is None:
