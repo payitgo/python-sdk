@@ -145,8 +145,8 @@ shop = payitgo.Client(os.environ["PAYITGO_KEY"], webhook_url="https://shop.examp
 ```
 
 A storefront's key cannot set the account's URL (`403`): pass `webhook_url` instead.
-Payout events always go to the webhook's URL, except a payout batch's when it has its own
-`webhook_url`.
+A payout's events go to its own `webhook_url` when it has one, otherwise to its batch's
+`webhook_url`, otherwise to the webhook's URL ([payout webhooks](#payout-webhooks)).
 
 **The signing secret.** Every notification of a mode is signed with that mode's secret,
 whichever URL it goes to. Copy it from the dashboard or read it with
@@ -181,6 +181,21 @@ def ipn():
 
 **Testing it.** `client.webhooks.test()` queues a signed `ping` event to the webhook's
 URL and returns its delivery (`400` when no URL is set).
+
+**Replaying them.** Every event is kept as it was sent. After an outage, read what you
+missed, oldest first, and handle it like a webhook (your event id check skips the ones you
+had):
+
+```python
+after = last_event_id()  # your code: the id of the last event you handled
+while True:
+    page = client.events.list(type="payout_item.*", after=after)  # type: one, a list, or a family
+    for event in page.events:
+        handle(event)
+        after = event.id
+    if not page.has_more:
+        break
+```
 
 ## Payouts
 
@@ -229,11 +244,19 @@ print(batch.status)  # pending_approval, awaiting_funds or processing
 client.payouts.retrieve(item.id)                         # any payment, by its id…
 client.payouts.retrieve_by_reference("withdrawal-1001")  # …or by your reference
 client.payouts.cancel(item.id)  # out of the list, or canceled if sent but not on its way yet
+client.payouts.remove([item.id, "7b1d3f5a9c2e4b6d8f0a1c3e"])  # many out of the list: a result per id
 ```
 
 `request` answers the same way the first time (`201`) and on a retry (`200`). To show a
 client their fee before they ask, `client.payouts.quote(items)` prices up to 100 payments
-without keeping anything: `{quote, items}`.
+without keeping anything: `{quote, items}`. Give a request `webhook_url=` to send its events
+to its own URL.
+
+A removed request is kept: `canceled`, with `cancel_reason` `"removed"`, no `batch_id`, and its
+reference given back (`released_reference`). `cancel` answers a payment canceled already as it
+is, so it is safe to retry. `remove(ids)` returns `{id, item}` or `{id, error: {status,
+message}}` per id; it never cancels a request sent already (a `409` result: `cancel` it), and
+an empty `ids` raises `ValueError` without a request.
 
 ### Batches
 
@@ -344,13 +367,15 @@ A live key gets `400`.
 ### Payout webhooks
 
 `payout_batch.quoted`, `.pending_approval`, `.approved`, `.rejected`, `.awaiting_funds`,
-`.processing`, `.completed` and `.canceled` carry the batch; `payout_item.sent`, `.failed`,
-`.canceled`, `.claimed` and `.claim_expired` the payment; `payout_wallet.withdrawn` the
-withdrawal. A batch made with `webhook_url` sends its events there instead of the webhook's
-URL. Schedules (set up in the dashboard) send `payout_schedule.run` with a summary of the
-schedule (its rows left out), and `payout_schedule.funding_needed` with `{schedule, shortfall}`
-a few days before a run the wallet cannot cover; a schedule's batches have `source`
-`"schedule"`.
+`.processing`, `.completed` and `.canceled` carry the batch; `payout_item.processing`,
+`.returned`, `.sent`, `.failed`, `.canceled`, `.claimed` and `.claim_expired` the payment;
+`payout_wallet.withdrawn` and `.withdrawal_failed` (with `fail_reason`) the withdrawal. A
+payment made with its own `webhook_url` sends its events there; otherwise a batch made with
+`webhook_url` sends its events and its payments' there; otherwise they go to the webhook's
+URL (withdrawals and schedules always do). Schedules (set up in the dashboard) send
+`payout_schedule.run` with a summary of the schedule (its rows left out), and
+`payout_schedule.funding_needed` with `{schedule, shortfall}` a few days before a run the
+wallet cannot cover; a schedule's batches have `source` `"schedule"`.
 
 ```python
 # In the handler under Webhooks (IPN), after construct_event and the event id check:
@@ -360,6 +385,25 @@ elif event.type in ("payout_item.failed", "payout_item.canceled", "payout_item.c
     # Its money stays in your wallet. A payment never sent gives its reference back
     # (released_reference), for a new payment to use.
     reopen_withdrawal(event.data.get("reference") or event.data.get("released_reference"))
+```
+
+**Staying in sync.** Every payment, a payout request or a batch row, ends `sent`, `failed`,
+`canceled` or `expired`, with one event each (`payout_item.canceled` whatever canceled it:
+`cancel_reason` and `canceled_by` say why and who), delivered at least once. An event keeps
+its `id` however often it is sent: deduplicate on `event.id`. Order is not guaranteed: act on
+`event.data.status` and the latest `event.data.updated_at`. A payout request also tells you
+when it leaves your list (`payout_item.processing`) and comes back (`payout_item.returned`,
+not final). Replay what you missed with `client.events.list(after=last_id)`, and resync your
+payments with `client.payouts.list()`, oldest change first:
+
+```python
+from datetime import datetime, timezone
+
+page = client.payouts.list(status=["sent", "failed", "canceled", "expired"],
+                           updated_since=datetime(2026, 10, 1, tzinfo=timezone.utc))
+for item in page["items"]:  # then read on with cursor=page["next_cursor"] while page.has_more
+    sync_withdrawal(item)
+cursor = page.get("next_cursor")  # keep it: next time, list(cursor=cursor) gets what changed since
 ```
 
 ## API
@@ -387,14 +431,17 @@ client.webhooks.remove()                           # the webhook, url None (the 
 client.webhooks.test()                             # the delivery of a "ping" event
 client.webhooks.construct_event(raw_body, signature_header, secret=None, tolerance=300)
 payitgo.Webhook.construct_event(raw_body, signature_header, secret, tolerance=300)  # no client needed
+client.events.list(type=None, after=None, created_after=None, limit=None)  # {events, has_more}, oldest first
 
 client.payouts.request(asset, address, amount, reference=None, tag=None, name=None, email=None, note=None,
-                       claim=None, claim_assets=None)  # claim=True, no address: a claim link
+                       claim=None, claim_assets=None, webhook_url=None)  # claim=True, no address: a claim link
 client.payouts.retrieve(id)                        # a payment: a request or a batch's
-client.payouts.retrieve_by_reference(reference)
+client.payouts.retrieve_by_reference(reference)    # or the latest payment that gave it back
+client.payouts.list(status=None, updated_since=None, cursor=None, limit=None)  # {items, has_more, next_cursor}
 client.payouts.inbox(status=None, limit=None, offset=None)  # {inbox, coverage, items, total, limit, offset}
 client.payouts.send(ids=None)                      # the batch they became
-client.payouts.cancel(id)                          # the payment
+client.payouts.cancel(id)                          # the payment (safe to retry)
+client.payouts.remove(ids)                         # [{id, item} or {id, error}], one per id
 client.payouts.quote(items, fee_paid_by=None, convert=None, convert_from=None)  # {quote, items}, nothing kept
 client.payout_batches.create(items, reference=None, name=None, fee_paid_by=None, webhook_url=None,
                              convert=None, convert_from=None)

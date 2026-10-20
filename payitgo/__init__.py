@@ -9,6 +9,7 @@
 Use the client from your server only: the API key is a secret.
 """
 
+import datetime
 import hashlib
 import hmac
 import json
@@ -32,8 +33,9 @@ WEBHOOK_EVENTS = (
     "payout.approved", "payout.rejected", "payout.sent", "settlement.completed", "settlement.failed",
     "payout_batch.quoted", "payout_batch.pending_approval", "payout_batch.approved", "payout_batch.rejected",
     "payout_batch.awaiting_funds", "payout_batch.processing", "payout_batch.completed", "payout_batch.canceled",
-    "payout_item.sent", "payout_item.failed", "payout_item.canceled", "payout_item.claimed",
-    "payout_item.claim_expired", "payout_wallet.withdrawn", "payout_schedule.run", "payout_schedule.funding_needed",
+    "payout_item.processing", "payout_item.returned", "payout_item.sent", "payout_item.failed",
+    "payout_item.canceled", "payout_item.claimed", "payout_item.claim_expired", "payout_wallet.withdrawn",
+    "payout_wallet.withdrawal_failed", "payout_schedule.run", "payout_schedule.funding_needed",
     "ping",
 )
 
@@ -86,6 +88,15 @@ def _query(**params):
     return "?" + urllib.parse.urlencode(params, safe=",") if params else ""
 
 
+def _rfc3339(value):
+    """A datetime as an RFC 3339 time in UTC (a naive one is taken as UTC); anything else as given."""
+    if isinstance(value, datetime.datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=datetime.timezone.utc)
+        return value.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    return value
+
+
 def _payout_items(items):
     """Payments as the API takes them: each amount as str(amount), keys set to None left out."""
     return [{k: str(v) if k == "amount" else v for k, v in item.items() if v is not None} for item in items]
@@ -119,6 +130,7 @@ class Client:
         self.payouts = _Payouts(self)
         self.payout_batches = _PayoutBatches(self)
         self.payout_wallets = _PayoutWallets(self)
+        self.events = _Events(self)
 
     def is_live(self):
         """Whether the key is a live key (its payments are real) rather than a test key.
@@ -307,7 +319,7 @@ class _Payouts:
         self._client = client
 
     def request(self, asset, address=None, amount=None, reference=None, *, tag=None, name=None, email=None,
-                note=None, claim=None, claim_assets=None):
+                note=None, claim=None, claim_assets=None, webhook_url=None):
         """Adds one client's payout request to your open list, checked and priced at once.
 
         Safe to retry with a reference: one that another payment carries already returns that
@@ -320,13 +332,17 @@ class _Payouts:
         With an email the link is emailed there; without one, share the payment's claim.url,
         and give its claim.pin another way (the recipient enters it to claim).
         An email alone makes no claim link: without an address the request is invalid.
+
+        webhook_url (https) gets this payment's events instead of the webhook's URL, signed with
+        the same secret, and stays with it when it is sent. The client's webhook_url is not used.
         """
         if amount is None:
             raise TypeError("payouts.request() missing required argument: 'amount'")
         body = {"asset": asset, "amount": str(amount)}
         body.update({k: v for k, v in {"address": address, "reference": reference, "tag": tag, "name": name,
                                        "email": email, "note": note, "claim": claim,
-                                       "claim_assets": claim_assets}.items() if v is not None})
+                                       "claim_assets": claim_assets, "webhook_url": webhook_url}.items()
+                     if v is not None})
         return self._client._request("POST", "/v1/payouts", body)["item"]
 
     def retrieve(self, id):
@@ -334,8 +350,25 @@ class _Payouts:
         return self._client._request("GET", "/v1/payouts/" + _path(id))["item"]
 
     def retrieve_by_reference(self, reference):
-        """A payment by your reference for it: a payout request, or a payment of a batch."""
+        """A payment by your reference for it: the one carrying it (a payout request, or a
+        payment of a batch), or else the latest that gave it back (canceled, failed or expired,
+        with it as released_reference). An empty reference raises ValueError, without a request."""
+        if not reference:
+            raise ValueError("payitgo: reference is required")
         return self._client._request("GET", "/v1/payouts" + _query(reference=reference))["item"]
+
+    def list(self, status=None, updated_since=None, cursor=None, limit=None):
+        """Every payment of the key's mode, whatever its batch (requests in your list, removed
+        ones, every batch's), oldest change first, to resync: {items, has_more, next_cursor},
+        read as page["items"].
+
+        status is one status or a list of them; updated_since a datetime (a naive one is taken
+        as UTC) or an RFC 3339 str. While has_more, read on with cursor=page["next_cursor"];
+        keep the last next_cursor (absent from an empty page) to read what changed since, later.
+        Changes of the last few seconds are left for the next read.
+        """
+        query = _query(status=status, updated_since=_rfc3339(updated_since), cursor=cursor, limit=limit)
+        return self._client._request("GET", "/v1/payouts" + query)
 
     def inbox(self, status=None, limit=None, offset=None):
         """Your open list: {inbox, coverage, items, total, limit, offset}.
@@ -361,9 +394,22 @@ class _Payouts:
         return self._client._request("POST", "/v1/payouts/send", body)["batch"]
 
     def cancel(self, id):
-        """Takes a request out: one still in your open list is removed (its reference free
-        again); one sent but not on its way yet is canceled. Returns the payment."""
+        """Takes a payment out: a request still in your open list is removed (canceled with
+        cancel_reason "removed", its reference free again, its record kept); one sent but not on
+        its way yet is canceled (cancel_reason "canceled"). One canceled already is returned as
+        it is: safe to retry. Returns the payment."""
         return self._client._request("DELETE", "/v1/payouts/" + _path(id))["item"]
+
+    def remove(self, ids):
+        """Takes 1 to 1000 payout requests out of your open list at once, each as cancel removes
+        one (a str is one id). Returns a result per id, in the order given: {id, item} when it
+        is removed, now or already, or {id, error: {status, message}}: 404 for an unknown id,
+        409 for one sent from the list already (cancel it instead) or ended.
+        """
+        ids = [ids] if isinstance(ids, str) else list(ids or ())
+        if not ids:
+            raise ValueError("payitgo: ids is empty: remove needs at least one payout request id")
+        return self._client._request("POST", "/v1/payouts/remove", {"ids": ids})["results"]
 
     def quote(self, items, fee_paid_by=None, *, convert=None, convert_from=None):
         """Prices up to 100 payments exactly as a batch would, keeping nothing: {quote, items}.
@@ -454,6 +500,27 @@ class _PayoutWallets:
         paper, and funds any test batch waiting for it. Returns the wallets."""
         return self._client._request("POST", "/v1/payout-wallets/" + _path(asset) + "/simulate-top-up",
                                      {"amount": str(amount)})["wallets"]
+
+
+class _Events:
+    """The events of the key's mode, as their webhooks carried them: to replay what your system
+    missed. Any account key reads them (read-only ones too); a storefront's key gets 403."""
+
+    def __init__(self, client):
+        self._client = client
+
+    def list(self, type=None, after=None, created_after=None, limit=None):
+        """Events of the key's mode, oldest first: {events, has_more}. Each event is as
+        construct_event returns it: {id, type, livemode, created_at, data}.
+
+        type is one event type or a list of them; "payout_item.*" names a family. after is an
+        event's id: the events after it. created_after is a datetime (a naive one is taken as
+        UTC) or an RFC 3339 str, ignored with after. While has_more, read on with after= the
+        last event's id. Pings are left out; events of the last few seconds wait for the next
+        read.
+        """
+        query = _query(type=type, after=after, created_after=_rfc3339(created_after), limit=limit)
+        return self._client._request("GET", "/v1/events" + query)
 
 
 class Webhook:

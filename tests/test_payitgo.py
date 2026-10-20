@@ -1,3 +1,4 @@
+import datetime
 import decimal
 import hashlib
 import hmac
@@ -436,6 +437,21 @@ CONVERTED = dict(PAYOUT_ITEM, id="8b0d2f4a6c8e0b2d4f6a8c0e", reference="payroll-
                  platform_fee="0.5", network_fee="1.602417", conversion_fee="2.34", fee="4.442417",
                  debit="69.442417", usd_rate="1", amount_usd="65", convert={
                      "to": "BTC", "ticker": "BTC", "network": "Bitcoin", "to_amount": "0.001", "estimate": "0.00100502"})
+# A request removed from the list by a team member: its record stays, with no batch, its reference given back.
+PAYOUT_REMOVED = {k: v for k, v in dict(
+    PAYOUT_ITEM, status="canceled", released_reference="wd-1001", cancel_reason="removed",
+    canceled_by="5e1a9c3d7b2f40e8a6c4d2b1", canceled_at="2026-10-20T09:40:00Z",
+    members={"5e1a9c3d7b2f40e8a6c4d2b1": "finance@acme.example"}, webhook_url="https://acme.example/withdrawals/ipn",
+    updated_at="2026-10-20T09:40:00Z").items() if k not in ("batch_id", "reference")}
+# A withdrawal payitgo gave up: its money stays in the wallet.
+WITHDRAWAL_FAILED = {
+    "id": "1d3f5a7c9e2b4d6f8a0c2e4b", "merchant_id": "3f8a1c27b94e05d6a2c71e90", "livemode": False,
+    "asset": "USDT_TRC20", "chain": "tron", "amount": "377.797583", "fee": "3.71", "send_amount": "374.087583",
+    "address_id": "3e7a1c9f5b2d4e8a6c0f2b1d", "address": "TWd4Kp9mR2xH7sN3vB6cJ8fL5qY1tZgEaU", "status": "failed",
+    "fail_reason": "it could not be sent: its money stays in the payout wallet",
+    "requested_by": "9b2e4c71d8a05f3e6c1a7b24", "members": {"9b2e4c71d8a05f3e6c1a7b24": "owner@acme.example"},
+    "created_at": "2026-10-20T11:02:15.33Z", "updated_at": "2026-10-20T11:20:40.1Z",
+}
 
 
 class PayoutsTest(_GatewayTest):
@@ -466,6 +482,31 @@ class PayoutsTest(_GatewayTest):
         self.assertEqual(self.request(2)["body"],
                          {"asset": "XRP", "address": "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe", "amount": "20", "tag": 1042})
 
+    def test_request_webhook_url(self):
+        own = dict(PAYOUT_ITEM, webhook_url="https://acme.example/withdrawals/ipn")
+        self.reply(201, {"item": own})
+        item = self.client.payouts.request("USDT_BEP20", PAYOUT_ITEM["address"], "25.5", "wd-1001",
+                                           webhook_url="https://acme.example/withdrawals/ipn")
+        self.check(0, "POST", "/v1/payouts", {"asset": "USDT_BEP20", "address": PAYOUT_ITEM["address"], "amount": "25.5",
+                                              "reference": "wd-1001",
+                                              "webhook_url": "https://acme.example/withdrawals/ipn"})
+        self.assertEqual(item.webhook_url, "https://acme.example/withdrawals/ipn")
+        self.assertNotIn("webhook_url", PAYOUT_ITEM)  # absent when it has none
+        # The client's webhook_url is for payments, not payout requests.
+        client = self.make_client(webhook_url="https://acme.example/orders/ipn")
+        self.reply(201, {"item": PAYOUT_ITEM})
+        client.payouts.request("USDT_BEP20", PAYOUT_ITEM["address"], "25.5", "wd-1001")
+        self.assertNotIn("webhook_url", self.request(1)["body"])
+        # A batch row takes its own too.
+        self.reply(201, {"batch": PAYOUT_BATCH})
+        self.client.payout_batches.create([dict(ROW, webhook_url="https://acme.example/withdrawals/ipn")])
+        self.check(2, "POST", "/v1/payout-batches",
+                   {"items": [dict(SENT_ROW, webhook_url="https://acme.example/withdrawals/ipn")]})
+        self.reply(400, {"error": "payments may name at most 10 different webhook_urls in one call"})
+        with self.assertRaises(payitgo.PayitgoError) as ctx:
+            self.client.payout_batches.create([dict(ROW, webhook_url="https://h%d.example/ipn" % i) for i in range(11)])
+        self.assertEqual(ctx.exception.status, 400)
+
     def test_request_invalid(self):
         # An invalid request is kept and says why: no error is raised.
         self.reply(201, {"item": PAYOUT_INVALID})
@@ -484,6 +525,11 @@ class PayoutsTest(_GatewayTest):
         self.reply(200, {"item": PAYOUT_ITEM})
         self.client.payouts.retrieve("a/b")  # escaped in the path
         self.assertEqual(self.request(2)["path"], "/v1/payouts/a%2Fb")
+        # No reference would list every payment: refused before any request is made.
+        for empty in ("", None):
+            with self.assertRaisesRegex(ValueError, "reference is required"):
+                self.client.payouts.retrieve_by_reference(empty)
+        self.assertEqual(len(self.server.requests), 3)
 
     def test_inbox(self):
         self.reply(200, INBOX)
@@ -524,10 +570,126 @@ class PayoutsTest(_GatewayTest):
         self.assertEqual((ctx.exception.status, ctx.exception.message), (400, "no valid payout request to send"))
 
     def test_cancel(self):
-        self.reply(200, {"item": dict(PAYOUT_ITEM, status="canceled")})
+        self.reply(200, {"item": PAYOUT_REMOVED})
         item = self.client.payouts.cancel(PAYOUT_ITEM["id"])
         self.check(0, "DELETE", "/v1/payouts/" + PAYOUT_ITEM["id"])
-        self.assertEqual(item.status, "canceled")
+        self.assertEqual((item.status, item.cancel_reason, item.released_reference), ("canceled", "removed", "wd-1001"))
+        self.assertEqual(item.members[item.canceled_by], "finance@acme.example")
+        self.assertNotIn("batch_id", item)  # out of the list, record kept
+        self.assertNotIn("reference", item)
+        # Again (a retry): the same payment, as it is.
+        self.reply(200, {"item": PAYOUT_REMOVED})
+        self.assertEqual(self.client.payouts.cancel(PAYOUT_ITEM["id"]), item)
+        self.check(1, "DELETE", "/v1/payouts/" + PAYOUT_ITEM["id"])
+        # Its reference given back still finds it.
+        self.reply(200, {"item": PAYOUT_REMOVED})
+        self.assertEqual(self.client.payouts.retrieve_by_reference("wd-1001").cancel_reason, "removed")
+        self.check(2, "GET", "/v1/payouts?reference=wd-1001")
+
+    def test_remove(self):
+        sent = "5f7b9d1c3e5a7b9d1f3a5c7e"
+        conflict = "not in your list of payout requests (sent already): cancel it with DELETE /v1/payouts/" + sent
+        results = [{"id": PAYOUT_ITEM["id"], "item": PAYOUT_REMOVED},
+                   {"id": sent, "error": {"status": 409, "message": conflict}},
+                   {"id": "000000000000000000000000", "error": {"status": 404, "message": "not found"}}]
+        self.reply(200, {"results": results})
+        got = self.client.payouts.remove([PAYOUT_ITEM["id"], sent, "000000000000000000000000"])
+        self.check(0, "POST", "/v1/payouts/remove", {"ids": [PAYOUT_ITEM["id"], sent, "000000000000000000000000"]})
+        self.assertEqual(self.request()["headers"]["Content-Type"], "application/json")
+        self.assertEqual(got, results)  # the list itself, one result per id in the order given
+        self.assertEqual((got[0].id, got[0].item.cancel_reason, got[0].item.released_reference),
+                         (PAYOUT_ITEM["id"], "removed", "wd-1001"))
+        self.assertNotIn("batch_id", got[0].item)
+        self.assertNotIn("error", got[0])
+        self.assertEqual((got[1].error.status, got[1].error.message), (409, conflict))
+        self.assertNotIn("item", got[1])
+        self.assertEqual(got[2].error.status, 404)
+        # One id, as a str; a tuple works too.
+        self.reply(200, {"results": results[:1]})
+        self.client.payouts.remove(PAYOUT_ITEM["id"])
+        self.check(1, "POST", "/v1/payouts/remove", {"ids": [PAYOUT_ITEM["id"]]})
+        self.reply(200, {"results": results[:1]})
+        self.client.payouts.remove((PAYOUT_ITEM["id"],))
+        self.check(2, "POST", "/v1/payouts/remove", {"ids": [PAYOUT_ITEM["id"]]})
+        # No ids: refused before any request is made.
+        for empty in ([], (), None):
+            with self.assertRaisesRegex(ValueError, "ids is empty"):
+                self.client.payouts.remove(empty)
+        self.assertEqual(len(self.server.requests), 3)
+
+    def test_remove_too_many(self):
+        self.reply(400, {"error": "remove between 1 and 1000 payout requests at a time"})
+        with self.assertRaises(payitgo.PayitgoError) as ctx:
+            self.client.payouts.remove(["%024d" % i for i in range(1001)])
+        self.assertEqual((ctx.exception.status, ctx.exception.message),
+                         (400, "remove between 1 and 1000 payout requests at a time"))
+
+    def test_list(self):
+        page = {"items": [PAYOUT_REMOVED, dict(PAYOUT_ITEM, status="sent", tx_id="ab" * 32)], "has_more": True,
+                "next_cursor": "MjAyNi0xMC0yMFQwOTo0MDowMFp8NGU2YThjMGIyZDRmNmExYzNlNWI3ZDlh"}
+        self.reply(200, page)
+        result = self.client.payouts.list(status=["sent", "failed", "canceled", "expired"],
+                                          updated_since=datetime.datetime(2026, 10, 20, 9, 0), limit=200)
+        # A naive datetime is taken as UTC, sent as RFC 3339.
+        self.check(0, "GET", "/v1/payouts?status=sent,failed,canceled,expired"
+                             "&updated_since=2026-10-20T09%3A00%3A00Z&limit=200")
+        self.assertEqual(result, page)
+        self.assertEqual((result["items"][0].cancel_reason, result["items"][1].status), ("removed", "sent"))
+        self.assertTrue(result.has_more)
+        # Read on with the cursor; an aware datetime is sent in UTC.
+        self.reply(200, {"items": [], "has_more": False})
+        result = self.client.payouts.list(
+            cursor=page["next_cursor"],
+            updated_since=datetime.datetime(2026, 10, 20, 11, 0, 0, 250000,
+                                            tzinfo=datetime.timezone(datetime.timedelta(hours=2))))
+        self.check(1, "GET", "/v1/payouts?updated_since=2026-10-20T09%3A00%3A00.250000Z&cursor=" + page["next_cursor"])
+        self.assertEqual((result["items"], result.has_more), ([], False))
+        self.assertIsNone(result.get("next_cursor"))  # absent from an empty page
+        # A str is sent as given; one status as a str; nothing set, no query.
+        self.reply(200, page)
+        self.client.payouts.list(status="canceled", updated_since="2026-10-20T09:00:00+02:00")
+        self.check(2, "GET", "/v1/payouts?status=canceled&updated_since=2026-10-20T09%3A00%3A00%2B02%3A00")
+        self.reply(200, page)
+        self.client.payouts.list()
+        self.check(3, "GET", "/v1/payouts")
+
+    def test_list_bad_cursor(self):
+        self.reply(400, {"error": "cursor is not one this API gave"})
+        with self.assertRaises(payitgo.PayitgoError) as ctx:
+            self.client.payouts.list(cursor="nope")
+        self.assertEqual((ctx.exception.status, ctx.exception.message), (400, "cursor is not one this API gave"))
+
+    def test_events_list(self):
+        events = [{"id": "9b1e3c5a7d2f4b6e8a0c1d3f", "type": "payout_item.canceled", "livemode": False,
+                   "created_at": "2026-10-20T09:40:00.312Z", "data": PAYOUT_REMOVED},
+                  {"id": "9b1e3c5a7d2f4b6e8a0c1d40", "type": "payout_wallet.withdrawal_failed", "livemode": False,
+                   "created_at": "2026-10-20T11:20:40.2Z", "data": WITHDRAWAL_FAILED}]
+        self.reply(200, {"events": events, "has_more": True})
+        page = self.client.events.list(type=["payout_item.*", "payout_wallet.withdrawal_failed"],
+                                       after="4f1c2a9e7b3d5f80a2c4e6b8", limit=2)
+        self.check(0, "GET", "/v1/events?type=payout_item.%2A,payout_wallet.withdrawal_failed"
+                             "&after=4f1c2a9e7b3d5f80a2c4e6b8&limit=2")
+        self.assertEqual(page, {"events": events, "has_more": True})
+        self.assertTrue(page.has_more)
+        self.assertEqual((page.events[0].type, page.events[0].data.cancel_reason), ("payout_item.canceled", "removed"))
+        self.assertEqual(page.events[1].data.fail_reason, WITHDRAWAL_FAILED["fail_reason"])
+        # From a time: a datetime in UTC; one type as a str; nothing set, no query.
+        self.reply(200, {"events": [], "has_more": False})
+        self.client.events.list(type="payout_item.sent", created_after=datetime.datetime(2026, 10, 20, 9, 0))
+        self.check(1, "GET", "/v1/events?type=payout_item.sent&created_after=2026-10-20T09%3A00%3A00Z")
+        self.reply(200, {"events": [], "has_more": False})
+        self.client.events.list(created_after="2026-10-20T09:00:00Z")
+        self.check(2, "GET", "/v1/events?created_after=2026-10-20T09%3A00%3A00Z")
+        self.reply(200, {"events": [], "has_more": False})
+        self.assertEqual(self.client.events.list().events, [])
+        self.check(3, "GET", "/v1/events")
+
+    def test_events_list_storefront(self):
+        message = "a storefront's key cannot read the account's events: use an account key"
+        self.reply(403, {"error": message})
+        with self.assertRaises(payitgo.PayitgoError) as ctx:
+            self.client.events.list()
+        self.assertEqual((ctx.exception.status, ctx.exception.message), (403, message))
 
     def test_quote(self):
         quote = {"quote": {"livemode": False, "fee_paid_by": "recipient", "totals": TOTALS, "total_usd": "25.5",
@@ -642,9 +804,17 @@ class PayoutsTest(_GatewayTest):
     def test_events(self):
         for event in ("payout_batch.quoted", "payout_batch.pending_approval", "payout_batch.approved",
                       "payout_batch.rejected", "payout_batch.awaiting_funds", "payout_batch.processing",
-                      "payout_batch.completed", "payout_batch.canceled", "payout_item.sent", "payout_item.failed",
-                      "payout_item.canceled", "payout_wallet.withdrawn"):
+                      "payout_batch.completed", "payout_batch.canceled", "payout_item.processing",
+                      "payout_item.returned", "payout_item.sent", "payout_item.failed", "payout_item.canceled",
+                      "payout_wallet.withdrawn", "payout_wallet.withdrawal_failed"):
             self.assertIn(event, payitgo.WEBHOOK_EVENTS)
+        # In the API's order, ping last.
+        self.assertEqual(payitgo.WEBHOOK_EVENTS[payitgo.WEBHOOK_EVENTS.index("payout_batch.canceled"):], (
+            "payout_batch.canceled", "payout_item.processing", "payout_item.returned", "payout_item.sent",
+            "payout_item.failed", "payout_item.canceled", "payout_item.claimed", "payout_item.claim_expired",
+            "payout_wallet.withdrawn", "payout_wallet.withdrawal_failed", "payout_schedule.run",
+            "payout_schedule.funding_needed", "ping"))
+        self.assertEqual(len(payitgo.WEBHOOK_EVENTS), len(set(payitgo.WEBHOOK_EVENTS)))
         body = json.dumps({"id": "evt_9", "type": "payout_item.sent", "livemode": False,
                            "created_at": "2026-10-20T09:31:12Z",
                            "data": dict(PAYOUT_ITEM, status="sent", tx_id="ab" * 32)}).encode()
@@ -755,6 +925,21 @@ class PayoutsTest(_GatewayTest):
                                  ("18000", "1520.5"))
                 self.assertNotIn("items", event.data.schedule)
         self.assertEqual((event.data.claim.url, event.data.status), (CLAIMABLE["claim"]["url"], "expired"))
+
+    def test_round_trip_events(self):
+        processing = dict(PAYOUT_ITEM, batch_id=PAYOUT_BATCH["id"])  # into a batch of its own
+        returned = dict(PAYOUT_INVALID, errors=[{"code": "below_minimum", "field": "amount",
+                                                 "message": "the amount is under the minimum right now"}])
+        for type_, data in (("payout_item.processing", processing), ("payout_item.returned", returned),
+                            ("payout_item.canceled", PAYOUT_REMOVED),
+                            ("payout_wallet.withdrawal_failed", WITHDRAWAL_FAILED)):
+            self.assertIn(type_, payitgo.WEBHOOK_EVENTS)
+            body = json.dumps({"id": "evt_" + type_, "type": type_, "livemode": False,
+                               "created_at": "2026-10-20T09:40:00Z", "data": data}).encode()
+            event = payitgo.Webhook.construct_event(body, sign(SECRET, int(time.time()), body), SECRET)
+            self.assertEqual((event.type, event.data), (type_, data))
+        self.assertEqual((event.data.status, event.data.fail_reason),
+                         ("failed", "it could not be sent: its money stays in the payout wallet"))
 
 
 class ClientConstructEventTest(unittest.TestCase):
