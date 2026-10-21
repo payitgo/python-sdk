@@ -31,7 +31,7 @@ def checkout():
         order_id=request.form["order_id"],   # your order id: safe to retry
         amount_usd=request.form["total"],    # e.g. "19.99"
         # token="USDT_TRC20",                # optional: without it the customer picks the coin
-        success_url="https://shop.example/thanks",
+        success_url="https://yourdomain.com/thanks",
     )
     return redirect(payment.checkout_url)
 
@@ -135,13 +135,13 @@ accepting POST requests), or give a payment its own when you create it:
 
 ```python
 # Once per mode (safe to repeat):
-client.webhooks.set("https://shop.example/payitgo/ipn")
+client.webhooks.set("https://api.yourdomain.com/payitgo/ipn")
 
 # Or per payment: its events go there instead of the webhook's URL.
-client.payments.create(order_id="ORD-1", amount_usd=10, webhook_url="https://shop.example/orders/ipn")
+client.payments.create(order_id="ORD-1", amount_usd=10, webhook_url="https://api.yourdomain.com/orders/ipn")
 
 # Or as the client's default for every payment it creates (a payment's own webhook_url wins):
-shop = payitgo.Client(os.environ["PAYITGO_KEY"], webhook_url="https://shop.example/orders/ipn")
+shop = payitgo.Client(os.environ["PAYITGO_KEY"], webhook_url="https://api.yourdomain.com/orders/ipn")
 ```
 
 A storefront's key cannot set the account's URL (`403`): pass `webhook_url` instead.
@@ -409,7 +409,7 @@ cursor = page.get("next_cursor")  # keep it: next time, list(cursor=cursor) gets
 ## API
 
 ```python
-client = payitgo.Client(api_key, base_url="https://api.example.com",  # or PAYITGO_BASE_URL
+client = payitgo.Client(api_key, base_url="https://api.payitgo.co",  # or PAYITGO_BASE_URL
                       timeout=30, max_retries=2,                    # network errors, 429, 5xx
                       webhook_secret=secret,                        # for webhooks.construct_event
                       webhook_url="https://…")                      # default webhook_url of payments.create

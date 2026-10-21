@@ -2,7 +2,7 @@
 
     import payitgo
 
-    client = payitgo.Client(os.environ["PAYITGO_KEY"], base_url="https://api.example.com")
+    client = payitgo.Client(os.environ["PAYITGO_KEY"], base_url="https://api.payitgo.co")
     payment = client.payments.create(order_id="ORD-1001", amount_usd=10, token="USDT_TRC20")
     # send the customer to payment.checkout_url; fulfil on the payment.confirmed webhook
 
