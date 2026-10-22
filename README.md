@@ -333,12 +333,12 @@ batch = client.payout_batches.create(
 )
 item = client.payout_batches.items(batch.id)["items"][0]
 print(item.convert.to, item.convert.to_amount, item.convert.estimate)  # BTC 0.001 0.00100502
-print(item.asset, item.amount, item.debit, item.conversion_fee)  # USDT_TRC20 65 69.442417 2.34
+print(item.asset, item.amount, item.fee, item.debit)  # USDT_TRC20 65 4.442417 69.442417
 ```
 
-For a converted payment, `asset`, `amount`, `fee` and `debit` are in the wallet's coin
-(`convert_from`) and `conversion_fee` is part of `fee`; `address` is the recipient's on the
-network of `convert.to`. `convert.estimate` is about what arrives, and `convert.amount_out`
+For a converted payment, `asset`, `amount`, `fee` (converting included) and `debit` are in
+the wallet's coin (`convert_from`); `address` is the recipient's on the network of
+`convert.to`. `convert.estimate` is about what arrives, and `convert.amount_out`
 what did, once sent. A batch with converted payments holds its prices for 15 minutes. A coin
 that cannot be converted into right now is a `conversion_unavailable` error.
 

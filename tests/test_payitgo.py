@@ -91,7 +91,7 @@ CHOSEN = {
     "id": "pay_1", "merchant_id": "mch_1", "order_id": "ORD-7", "status": "pending", "livemode": False,
     "token": "XRP", "chain": "xrp", "deposit_address": "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe",
     "destination_tag": 1042, "crypto_amount": "20", "received_amount": "0", "usd_amount": "10",
-    "amount_due_usd": "10", "fees_paid_by_customer": False, "network_fee": "0.000012", "network_fee_usd": "0.01",
+    "amount_due_usd": "10", "fees_paid_by_customer": False,
     "settlement": "custodial", "received_usd": "0", "rate_locked": "0.5", "deposits": [],
     "expires_at": "2026-10-10T12:15:00Z", "created_at": "2026-10-10T12:00:00Z",
     "network_fee_note": "Final in seconds. Include the destination tag: it is required.",
@@ -106,7 +106,7 @@ SIMULATED = {
     "simulation": {"outcome": "confirmed", "state": "running"},
     "token": "USDT_TRC20", "chain": "tron", "deposit_address": "TPk2bpQqWRpXiaUHS9SXnZCDgvwrsuJ71o",
     "crypto_amount": "20", "received_amount": "20", "usd_amount": "20", "amount_due_usd": "20",
-    "fees_paid_by_customer": False, "network_fee": "1", "network_fee_usd": "0.3", "settlement": "custodial",
+    "fees_paid_by_customer": False, "settlement": "custodial",
     "received_usd": "20", "rate_locked": "1",
     "deposits": [{
         "tx_id": "8de0120d502929788a71a7b7cf60e5ef3c095cdbb05cd8a7ddabc0bc9ffa9582", "token": "USDT_TRC20", "chain": "tron", "amount": "20",
@@ -364,14 +364,14 @@ PAYOUT_ITEM = {
     "recipient": {"name": "Ana Silva", "note": "withdrawal 1001"}, "asset": "USDT_BEP20", "ticker": "USDT",
     "icon_url": "https://api.payitgo.co/coins/USDT_BEP20.svg", "chain": "bsc",
     "address": "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed", "amount": "25.5", "send_amount": "25.5",
-    "platform_fee": "0.5", "network_fee": "0.01183421", "fee": "0.51183421", "debit": "26.01183421",
+    "fee": "0.51183421", "debit": "26.01183421",
     "usd_rate": "1", "amount_usd": "25.5", "status": "ready", "errors": [], "warnings": [],
     "created_at": "2026-10-20T09:15:01.88Z", "updated_at": "2026-10-20T09:15:01.88Z",
 }
 # A request kept but never sent: the address is of another network.
 PAYOUT_INVALID = dict(PAYOUT_ITEM, id="5f7b9d1c3e5a7b9d1f3a5c7e", reference="wd-1002",
                       address="TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7", status="invalid", send_amount="0",
-                      platform_fee="0", network_fee="0", fee="0", debit="0", usd_rate="0", amount_usd="0",
+                      fee="0", debit="0", usd_rate="0", amount_usd="0",
                       errors=[{"code": "wrong_network", "field": "address",
                                "message": "this address is for Tron, not BNB Smart Chain",
                                "hint": "pay it in a coin of that network, or check the address"}])
@@ -379,7 +379,7 @@ COUNTS = {"total": 1, "invalid": 0, "ready": 1, "cooling": 0, "queued": 0, "send
           "canceled": 0, "claimable": 0, "expired": 0}
 TOTALS = [{"asset": "USDT_BEP20", "ticker": "USDT", "icon_url": "https://api.payitgo.co/coins/USDT_BEP20.svg",
            "chain": "bsc", "network": "BNB Smart Chain (BEP-20)", "items": 1, "amount": "25.5",
-           "send_amount": "25.5", "platform_fee": "0.5", "network_fee": "0.01183421", "fee": "0.51183421",
+           "send_amount": "25.5", "fee": "0.51183421",
            "debit": "26.01183421", "debit_usd": "26.01", "saved_usd": "0"}]
 PAYOUT_BATCH = {
     "id": "6a1f3c8e2d9b4a7051c3e8f2", "merchant_id": "3f8a1c27b94e05d6a2c71e90", "livemode": False,
@@ -434,8 +434,7 @@ CLAIMED = dict(CLAIMABLE, asset="USDT_BEP20", chain="bsc", address=PAYOUT_ITEM["
 # Paid in BTC from the wallet's USDT on Tron, converted on its way.
 CONVERTED = dict(PAYOUT_ITEM, id="8b0d2f4a6c8e0b2d4f6a8c0e", reference="payroll-2026-10-dan", asset="USDT_TRC20",
                  chain="tron", address="bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", amount="65", send_amount="67.01",
-                 platform_fee="0.5", network_fee="1.602417", conversion_fee="2.34", fee="4.442417",
-                 debit="69.442417", usd_rate="1", amount_usd="65", convert={
+                 fee="4.442417", debit="69.442417", usd_rate="1", amount_usd="65", convert={
                      "to": "BTC", "ticker": "BTC", "network": "Bitcoin", "to_amount": "0.001", "estimate": "0.00100502"})
 # A request removed from the list by a team member: its record stays, with no batch, its reference given back.
 PAYOUT_REMOVED = {k: v for k, v in dict(
@@ -880,10 +879,9 @@ class PayoutsTest(_GatewayTest):
         page = {"items": [CONVERTED], "total": 1, "limit": 50, "offset": 0}
         self.reply(200, page)
         item = self.client.payout_batches.items(result.id)["items"][0]
-        self.assertEqual((item.asset, item.conversion_fee, item.convert.to, item.convert.to_amount,
-                          item.convert.estimate), ("USDT_TRC20", "2.34", "BTC", "0.001", "0.00100502"))
+        self.assertEqual((item.asset, item.fee, item.convert.to, item.convert.to_amount,
+                          item.convert.estimate), ("USDT_TRC20", "4.442417", "BTC", "0.001", "0.00100502"))
         self.assertNotIn("amount_out", item.convert)  # once sent
-        self.assertNotIn("conversion_fee", PAYOUT_ITEM)  # absent when not converted
 
     def test_quote_convert(self):
         quote = {"quote": {"livemode": False, "fee_paid_by": "merchant", "totals": TOTALS, "total_usd": "69.44",
