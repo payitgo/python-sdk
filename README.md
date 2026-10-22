@@ -19,7 +19,6 @@ from flask import Flask, abort, redirect, request
 
 client = payitgo.Client(
     os.environ["PAYITGO_KEY"],
-    base_url=os.environ["PAYITGO_BASE_URL"],
     webhook_secret=os.environ["PAYITGO_WEBHOOK_SECRET"],  # the signing secret: see Webhooks (IPN) below
 )
 app = Flask(__name__)
@@ -294,7 +293,8 @@ then `payout_batch.quoted` follows). Its prices hold for an hour: past that, `su
 When you don't know the recipient's address, pass `claim=True` (or `claim_assets`) and leave
 the address out: the payment is a **claim link**, and its recipient chooses the coin and the
 address. With an email, payitgo emails them the link; without one, share `item.claim.url`
-yourself. `claim_assets` are the other coins they may choose, paid at the same dollar value.
+yourself and give its PIN, `item.claim.pin`, another way: the recipient enters it to claim.
+`claim_assets` are the other coins they may choose, paid at the same dollar value.
 An email alone makes no claim link: without an address and `claim=True` the payment is
 `invalid` (`invalid_address`).
 
@@ -313,7 +313,7 @@ item = client.payouts.request(
 Once its batch is funded, the payment is `claimable` and its money is kept for it until
 `item.claim.expires_at`; claimed, it is paid like any other (`payout_item.claimed`, then
 `payout_item.sent`). Never claimed, it is `expired` and its money is free again
-(`payout_item.claim_expired`). Read `item.claim`: `url`, `email`, `assets`, `expires_at`,
+(`payout_item.claim_expired`). Read `item.claim`: `url`, `pin`, `email`, `assets`, `expires_at`,
 `claimed_at`, `emailed`, `extended`, and `funded_asset` / `funded_amount` when the recipient
 chose another coin than the one it was funded with. A bad email is an `invalid_email` error.
 
@@ -409,31 +409,31 @@ cursor = page.get("next_cursor")  # keep it: next time, list(cursor=cursor) gets
 ## API
 
 ```python
-client = payitgo.Client(api_key, base_url="https://api.payitgo.co",  # or PAYITGO_BASE_URL
+client = payitgo.Client(api_key,
                       timeout=30, max_retries=2,                    # network errors, 429, 5xx
                       webhook_secret=secret,                        # for webhooks.construct_event
                       webhook_url="https://…")                      # default webhook_url of payments.create
 
 client.is_live()                                   # False for a test key (asks payitgo once)
-client.payments.create(order_id, amount_usd, token, webhook_url=None, description=None, metadata=None,
-                       customer_email=None, success_url=None, cancel_url=None, simulate=None)
+client.payments.create(order_id, amount_usd, token=None, webhook_url=None, *, tokens=None, description=None,
+                       metadata=None, customer_email=None, success_url=None, cancel_url=None, simulate=None)
 client.payments.create(order_id, price_amount=…, price_currency=…, …)  # priced in another currency
 client.payments.select_token(payment_id, token)    # or your order id: the payment with its coin
 client.payments.simulate(payment_id, "confirmed")  # test keys: plays the outcome
 client.payments.retrieve(payment_id)               # or your order id
 client.payments.list(status="confirmed", store_id=store_id, limit=50, offset=0) # every filter optional
-client.tokens.list()                               # [{token, chain, min_usd, network_fee_usd, fee_note}]
+client.tokens.list()                               # [{token, chain, name, min_usd, network_fee_usd, fee_note, …}]
 client.tokens.list(amount_usd="49.90")             # the coins a $49.90 payment offers, with amount_due_usd
 client.checkout.retrieve(checkout_token)           # public payer view
-client.webhooks.get()                              # {livemode, url, secret, created_at, updated_at}
+client.webhooks.get()                              # {livemode, url, secret, events, created_at, updated_at}
 client.webhooks.set(url)                           # the webhook
 client.webhooks.remove()                           # the webhook, url None (the secret stays)
 client.webhooks.test()                             # the delivery of a "ping" event
-client.webhooks.construct_event(raw_body, signature_header, secret=None, tolerance=300)
+client.webhooks.construct_event(raw_body, signature_header, secret=None, tolerance=None)  # None: 300 seconds
 payitgo.Webhook.construct_event(raw_body, signature_header, secret, tolerance=300)  # no client needed
 client.events.list(type=None, after=None, created_after=None, limit=None)  # {events, has_more}, oldest first
 
-client.payouts.request(asset, address, amount, reference=None, tag=None, name=None, email=None, note=None,
+client.payouts.request(asset, address, amount, reference=None, *, tag=None, name=None, email=None, note=None,
                        claim=None, claim_assets=None, webhook_url=None)  # claim=True, no address: a claim link
 client.payouts.retrieve(id)                        # a payment: a request or a batch's
 client.payouts.retrieve_by_reference(reference)    # or the latest payment that gave it back
@@ -442,8 +442,8 @@ client.payouts.inbox(status=None, limit=None, offset=None)  # {inbox, coverage, 
 client.payouts.send(ids=None)                      # the batch they became
 client.payouts.cancel(id)                          # the payment (safe to retry)
 client.payouts.remove(ids)                         # [{id, item} or {id, error}], one per id
-client.payouts.quote(items, fee_paid_by=None, convert=None, convert_from=None)  # {quote, items}, nothing kept
-client.payout_batches.create(items, reference=None, name=None, fee_paid_by=None, webhook_url=None,
+client.payouts.quote(items, fee_paid_by=None, *, convert=None, convert_from=None)  # {quote, items}, nothing kept
+client.payout_batches.create(items, reference=None, *, name=None, fee_paid_by=None, webhook_url=None,
                              convert=None, convert_from=None)
 client.payout_batches.list(status=None, limit=None, offset=None)  # {batches, total, limit, offset}
 client.payout_batches.retrieve(id)

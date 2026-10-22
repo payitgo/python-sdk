@@ -2,7 +2,7 @@
 
     import payitgo
 
-    client = payitgo.Client(os.environ["PAYITGO_KEY"], base_url="https://api.payitgo.co")
+    client = payitgo.Client(os.environ["PAYITGO_KEY"])
     payment = client.payments.create(order_id="ORD-1001", amount_usd=10, token="USDT_TRC20")
     # send the customer to payment.checkout_url; fulfil on the payment.confirmed webhook
 
@@ -114,8 +114,6 @@ class Client:
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("payitgo: the API key is required")
         base_url = base_url or os.environ.get("PAYITGO_BASE_URL") or DEFAULT_BASE_URL
-        if not base_url:
-            raise ValueError("payitgo: set base_url (or PAYITGO_BASE_URL) to your gateway's address")
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
