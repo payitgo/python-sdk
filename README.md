@@ -118,7 +118,7 @@ payment = client.payments.simulate("TEST-2", "partially_paid")
 ```
 
 Outcomes (`payitgo.SIMULATION_OUTCOMES`): `confirmed`, `overpaid`, `partially_paid`,
-`underpaid`, `expired`, `failed`, `wrong_asset`, `paid_late`. Simulated deposits have
+`underpaid`, `expired`, `failed`, `wrong_asset`, `paid_late`, `paid_twice`. Simulated deposits have
 `"simulated": True`; their `tx_id` names no transaction on any chain. A live key gets
 `400`; a payment whose simulation is still running, `409`.
 

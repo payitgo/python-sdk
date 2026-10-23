@@ -41,7 +41,7 @@ WEBHOOK_EVENTS = (
 
 #: The outcomes a test payment can be made to go through: ``client.payments.simulate()``.
 SIMULATION_OUTCOMES = (
-    "confirmed", "overpaid", "partially_paid", "underpaid", "expired", "failed", "wrong_asset", "paid_late",
+    "confirmed", "overpaid", "partially_paid", "underpaid", "expired", "failed", "wrong_asset", "paid_late", "paid_twice",
 )
 
 
