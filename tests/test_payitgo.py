@@ -17,8 +17,8 @@ KEY = "8334dfeae25b9b200b75995e6e55cf8c3602120c1920bfef7a4ff8900b620881"
 
 # Signed by the gateway's own signer.
 SECRET = "05bd6b428158318cc38756fa34aa60795af0fc5d9a316dcc9b060c8ca1863fc3"
-HEADER = "t=1760000000,v1=75eb20fb34bccab4b9121285930b076e5e60ccad0a2542bd76eb56d89744faed"
-BODY = b'{"id":"b8e1f80bd70ae0784c7855a4","type":"payment.confirmed","livemode":false,"created_at":"2026-10-09T12:00:00Z","data":{"id":"040ffd5925d40e11c67b7238","order_id":"ORD-1","status":"confirmed","usd_amount":"10"}}'
+HEADER = "t=1760000000,v1=b61376838fdc09d9241eb407eda645be1e67a88fed148fc057c56a1b784e01e5"
+BODY = b'{"id":"b8e1f80bd70ae0784c7855a4","type":"payment.confirmed","livemode":false,"created_at":"2026-10-09T12:00:00Z","data":{"id":"040ffd5925d40e11c67b7238","order_id":"ORD-1","status":"confirmed","currency":"USD","amount":"10"}}'
 OTHER_SECRET = "bd4106123e659e259c401119d0c7ef0a221df306a5a414b6fb6a579499962d26"
 
 
@@ -90,9 +90,9 @@ DELIVERY = {
 CHOSEN = {
     "id": "pay_1", "merchant_id": "mch_1", "order_id": "ORD-7", "status": "pending", "livemode": False,
     "token": "XRP", "chain": "xrp", "deposit_address": "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe",
-    "destination_tag": 1042, "crypto_amount": "20", "received_amount": "0", "usd_amount": "10",
-    "amount_due_usd": "10", "fees_paid_by_customer": False,
-    "settlement": "custodial", "received_usd": "0", "rate_locked": "0.5", "deposits": [],
+    "destination_tag": 1042, "crypto_amount": "20", "crypto_received": "0", "currency": "USD", "amount": "10",
+    "amount_due": "10", "fees_paid_by_customer": False,
+    "settlement": "custodial", "amount_received": "0", "rate_locked": "0.5", "deposits": [],
     "expires_at": "2026-10-10T12:15:00Z", "created_at": "2026-10-10T12:00:00Z",
     "network_fee_note": "Final in seconds. Include the destination tag: it is required.",
     "qr_payload": "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe",
@@ -105,12 +105,12 @@ SIMULATED = {
     "id": "pay_2", "merchant_id": "mch_1", "order_id": "ORD-8", "status": "detecting", "livemode": False,
     "simulation": {"outcome": "confirmed", "state": "running"},
     "token": "USDT_TRC20", "chain": "tron", "deposit_address": "TPk2bpQqWRpXiaUHS9SXnZCDgvwrsuJ71o",
-    "crypto_amount": "20", "received_amount": "20", "usd_amount": "20", "amount_due_usd": "20",
+    "crypto_amount": "20", "crypto_received": "20", "currency": "USD", "amount": "20", "amount_due": "20",
     "fees_paid_by_customer": False, "settlement": "custodial",
-    "received_usd": "20", "rate_locked": "1",
+    "amount_received": "20", "rate_locked": "1",
     "deposits": [{
         "tx_id": "8de0120d502929788a71a7b7cf60e5ef3c095cdbb05cd8a7ddabc0bc9ffa9582", "token": "USDT_TRC20", "chain": "tron", "amount": "20",
-        "usd_value": "20", "counted": True, "status": "pending", "seen_at": "2026-10-10T12:00:05Z", "simulated": True,
+        "value": "20", "counted": True, "status": "pending", "seen_at": "2026-10-10T12:00:05Z", "simulated": True,
     }],
     "expires_at": "2026-10-10T12:15:00Z", "created_at": "2026-10-10T12:00:00Z",
     "network_fee_note": "Final in about a minute.",
@@ -118,9 +118,8 @@ SIMULATED = {
 }
 
 
-# A payment priced in euros: the gateway converted the price into usd_amount at price_rate.
-PRICED = dict(CHOSEN, order_id="ORD-10", usd_amount="49.23", amount_due_usd="49.23", price_amount="45.5",
-              price_currency="EUR", price_rate="1.082")
+# A payment priced in euros: every figure in EUR, converted by the gateway at the rate of the moment.
+PRICED = dict(CHOSEN, order_id="ORD-10", currency="EUR", amount="45.5", amount_due="45.5", rate_locked="0.46")
 
 
 class _FakeGateway(BaseHTTPRequestHandler):
@@ -176,13 +175,17 @@ class _GatewayTest(unittest.TestCase):
 
 class WebhookIPNTest(_GatewayTest):
     def test_tokens(self):
-        tokens = [{"token": "USDT_BEP20", "chain": "bsc", "min_usd": "1", "network_fee_usd": "0.01", "amount_due_usd": "40.43", "fee_note": ""}]
-        self.reply(200, {"tokens": tokens})
+        tokens = [{"token": "USDT_BEP20", "chain": "bsc", "minimum": "1", "network_fee": "0.01", "amount_due": "40.43", "fee_note": ""}]
+        self.reply(200, {"currency": "USD", "tokens": tokens})
         self.assertEqual(self.client.tokens.list(), tokens)
         self.assertEqual((self.request(0)["method"], self.request(0)["path"]), ("GET", "/v1/tokens"))
-        self.reply(200, {"tokens": tokens})
-        self.client.tokens.list(amount_usd="49.90")
-        self.assertEqual(self.request(1)["path"], "/v1/tokens?amount_usd=49.90")
+        self.reply(200, {"currency": "USD", "tokens": tokens})
+        self.client.tokens.list(amount="49.90")
+        self.assertEqual(self.request(1)["path"], "/v1/tokens?amount=49.90")
+        # The figures in another currency; the amount goes as str(amount).
+        self.reply(200, {"currency": "EUR", "tokens": tokens})
+        self.client.tokens.list(decimal.Decimal("49.90"), currency="eur")
+        self.assertEqual(self.request(2)["path"], "/v1/tokens?amount=49.90&currency=eur")
 
     def test_get(self):
         self.reply(200, {"webhook": WEBHOOK})
@@ -254,7 +257,7 @@ class WebhookIPNTest(_GatewayTest):
 
     def test_payment_webhook_url(self):
         payment = self.client.payments.create("ORD-1", 10)
-        self.assertEqual(self.request(0)["body"], {"order_id": "ORD-1", "amount_usd": "10"})
+        self.assertEqual(self.request(0)["body"], {"order_id": "ORD-1", "amount": "10"})
         self.assertNotIn("webhook_url", payment)
         payment = self.client.payments.create("ORD-2", 10, webhook_url="https://shop.example/own")
         self.assertEqual(self.request(1)["body"]["webhook_url"], "https://shop.example/own")
@@ -330,31 +333,29 @@ class WebhookIPNTest(_GatewayTest):
         self.reply(201, SIMULATED)
         payment = self.client.payments.create("ORD-8", 20, token="USDT_TRC20", simulate="confirmed")
         self.assertEqual(self.request()["body"],
-                         {"order_id": "ORD-8", "amount_usd": "20", "token": "USDT_TRC20", "simulate": "confirmed"})
+                         {"order_id": "ORD-8", "amount": "20", "token": "USDT_TRC20", "simulate": "confirmed"})
         self.assertEqual(payment.simulation.outcome, "confirmed")
         self.assertIn("confirmed", payitgo.SIMULATION_OUTCOMES)
 
     def test_payment_create_price(self):
         self.reply(201, PRICED)
-        payment = self.client.payments.create("ORD-10", price_amount=decimal.Decimal("45.50"), price_currency="eur")
-        # The amount goes as a string, like amount_usd, and no amount_usd with it.
-        self.assertEqual(self.request()["body"], {"order_id": "ORD-10", "price_amount": "45.50", "price_currency": "eur"})
+        payment = self.client.payments.create("ORD-10", decimal.Decimal("45.50"), currency="eur")
+        # The amount goes as a string, with its currency.
+        self.assertEqual(self.request()["body"], {"order_id": "ORD-10", "amount": "45.50", "currency": "eur"})
         self.assertEqual(payment, PRICED)
-        self.assertEqual((payment.price_amount, payment.price_currency, payment.price_rate, payment.usd_amount),
-                         ("45.5", "EUR", "1.082", "49.23"))
-        # amount_usd still works as before, positionally too, and sends no price.
+        self.assertEqual((payment.currency, payment.amount, payment.amount_due), ("EUR", "45.5", "45.5"))
+        # Without a currency the price is in US dollars, and none is sent.
         self.client.payments.create("ORD-11", "10", "USDT_TRC20")
-        self.assertEqual(self.request(1)["body"], {"order_id": "ORD-11", "amount_usd": "10", "token": "USDT_TRC20"})
-        # A payment priced in dollars has none of the price fields.
+        self.assertEqual(self.request(1)["body"], {"order_id": "ORD-11", "amount": "10", "token": "USDT_TRC20"})
         self.reply(200, CHOSEN)
-        self.assertNotIn("price_amount", self.client.payments.retrieve("pay_1"))
+        self.assertEqual(self.client.payments.retrieve("pay_1").currency, "USD")
 
     def test_payment_create_price_no_rate(self):
-        self.reply(503, {"error": "exchange rate unavailable for price_currency: try again shortly"})
+        self.reply(503, {"error": "exchange rate unavailable for currency: try again shortly"})
         with self.assertRaises(payitgo.PayitgoError) as ctx:
-            self.client.payments.create("ORD-10", price_amount="45.50", price_currency="EUR")
+            self.client.payments.create("ORD-10", "45.50", currency="XAF")
         self.assertEqual((ctx.exception.status, ctx.exception.message),
-                         (503, "exchange rate unavailable for price_currency: try again shortly"))
+                         (503, "exchange rate unavailable for currency: try again shortly"))
 
 
 # A client's payout request, checked and priced into the open list.

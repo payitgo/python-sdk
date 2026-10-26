@@ -28,7 +28,7 @@ app = Flask(__name__)
 def checkout():
     payment = client.payments.create(
         order_id=request.form["order_id"],   # your order id: safe to retry
-        amount_usd=request.form["total"],    # e.g. "19.99"
+        amount=request.form["total"],        # e.g. "19.99", in US dollars unless you give a currency
         # token="USDT_TRC20",                # optional: without it the customer picks the coin
         success_url="https://yourdomain.com/thanks",
     )
@@ -53,27 +53,28 @@ a live key when the account owner has turned live mode on. A key does not say it
 (the dashboard shows a Test or Live badge next to it): `client.is_live()` asks payitgo,
 once.
 
-## Prices in other currencies
+## Prices in your own currency
 
-To price a payment in your own currency, give `price_amount` and `price_currency` (an ISO
-4217 code such as `EUR`, `GBP` or `NGN`) instead of `amount_usd`. payitgo converts the price
-into dollars at the rate of the moment, and the payment keeps both:
+A payment is priced in US dollars unless you give `currency`, an ISO 4217 code such as `EUR`,
+`GBP` or `NGN` (any case). Every figure on the payment is then in that currency: `amount` (your
+price), `amount_due` (what the customer pays: the price, plus the fees when you pass them on),
+`amount_received` (what has arrived so far), each deposit's `value`, each coin's `minimum` and
+`network_fee` in `token_options`, and `rate_locked` (the coin's price). Only `crypto_amount`
+and `crypto_received` are in the coin.
 
 ```python
 payment = client.payments.create(
     order_id="ORD-1002",
-    price_amount="45.50",    # sent as str(price_amount): a str or a Decimal, not a float
-    price_currency="EUR",    # any case
+    amount="45.50",    # sent as str(amount): a str or a Decimal, not a float
+    currency="EUR",    # any case; US dollars when left out
 )
-# payment.price_amount "45.5", payment.price_currency "EUR",
-# payment.price_rate "1.082" (dollars per euro), payment.usd_amount "49.23"
+# payment.currency "EUR", payment.amount "45.5", payment.amount_due "45.5"
 ```
 
-Everything else (`usd_amount`, `crypto_amount`, fees, minimums) stays in dollars; a payment
-priced in dollars has no `price_*` keys (read them with `.get()`). Give `amount_usd` or the
-pair, not both (`400`). When no exchange rate can be had, `create` raises a `PayitgoError`
-with status `503` (`exchange rate unavailable for price_currency: try again shortly`) once the
-client's retries are spent: try again shortly.
+payitgo converts at the rate of the moment. When no exchange rate can be had, `create` raises
+a `PayitgoError` with status `503` (`exchange rate unavailable for currency: try again
+shortly`) once the client's retries are spent: try again shortly. A payment link priced in a
+coin has that coin as its `currency` (`"ETH"`), and its figures in the coin.
 
 ## Your own payment page
 
@@ -90,7 +91,7 @@ are needed.
   minutes away.
 
 ```python
-payment = client.payments.create(order_id="ORD-1", amount_usd=10)
+payment = client.payments.create(order_id="ORD-1", amount=10)
 # your page shows payment.token_options; the customer picks one
 chosen = client.payments.select_token(payment.id, "USDT_TRC20")  # or your order id
 # render chosen.deposit_address, chosen.crypto_amount, chosen.qr_payload, chosen.expires_at
@@ -110,7 +111,7 @@ outcome and payitgo plays its deposits, status changes and webhooks a few second
 ```python
 # Choose the outcome when you create the payment (with token it starts at once,
 # without it once the coin is chosen)…
-client.payments.create(order_id="TEST-1", amount_usd=10, token="USDT_TRC20", simulate="confirmed")
+client.payments.create(order_id="TEST-1", amount=10, token="USDT_TRC20", simulate="confirmed")
 
 # …or later, on a payment you already have (its id or your order id).
 payment = client.payments.simulate("TEST-2", "partially_paid")
@@ -137,7 +138,7 @@ accepting POST requests), or give a payment its own when you create it:
 client.webhooks.set("https://api.yourdomain.com/payitgo/ipn")
 
 # Or per payment: its events go there instead of the webhook's URL.
-client.payments.create(order_id="ORD-1", amount_usd=10, webhook_url="https://api.yourdomain.com/orders/ipn")
+client.payments.create(order_id="ORD-1", amount=10, webhook_url="https://api.yourdomain.com/orders/ipn")
 
 # Or as the client's default for every payment it creates (a payment's own webhook_url wins):
 shop = payitgo.Client(os.environ["PAYITGO_KEY"], webhook_url="https://api.yourdomain.com/orders/ipn")
@@ -415,15 +416,15 @@ client = payitgo.Client(api_key,
                       webhook_url="https://…")                      # default webhook_url of payments.create
 
 client.is_live()                                   # False for a test key (asks payitgo once)
-client.payments.create(order_id, amount_usd, token=None, webhook_url=None, *, tokens=None, description=None,
-                       metadata=None, customer_email=None, success_url=None, cancel_url=None, simulate=None)
-client.payments.create(order_id, price_amount=…, price_currency=…, …)  # priced in another currency
+client.payments.create(order_id, amount, token=None, webhook_url=None, *, currency=None, tokens=None,
+                       description=None, metadata=None, customer_email=None, success_url=None, cancel_url=None,
+                       simulate=None)
 client.payments.select_token(payment_id, token)    # or your order id: the payment with its coin
 client.payments.simulate(payment_id, "confirmed")  # test keys: plays the outcome
 client.payments.retrieve(payment_id)               # or your order id
 client.payments.list(status="confirmed", store_id=store_id, limit=50, offset=0) # every filter optional
-client.tokens.list()                               # [{token, chain, name, min_usd, network_fee_usd, fee_note, …}]
-client.tokens.list(amount_usd="49.90")             # the coins a $49.90 payment offers, with amount_due_usd
+client.tokens.list()                               # [{token, chain, name, minimum, network_fee, fee_note, …}], in US dollars
+client.tokens.list(amount="49.90", currency="EUR") # the coins a 49.90 EUR payment offers, with amount_due
 client.checkout.retrieve(checkout_token)           # public payer view
 client.webhooks.get()                              # {livemode, url, secret, events, created_at, updated_at}
 client.webhooks.set(url)                           # the webhook
@@ -467,9 +468,9 @@ with `decimal.Decimal`. `payitgo.WEBHOOK_EVENTS` lists the event types.
 
 ```python
 try:
-    client.payments.create(order_id="ORD-1", amount_usd=1, token="BTC")
+    client.payments.create(order_id="ORD-1", amount=1, token="BTC")
 except payitgo.PayitgoError as e:
-    print(e.status, e.message)   # 400 minimum payment in BTC is $10 right now (network fees)
+    print(e.status, e.message)   # 400 minimum payment in BTC is $10.00 right now (network fees)
 ```
 
 `PayitgoError.status` is the HTTP status (0 for a network error).
